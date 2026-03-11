@@ -310,6 +310,235 @@ class DataInterpreterAgent:
             "sample_rows": sample,
         }
 
+    def auto_sales_insights(self, dataset_id: str, max_rows: int = 10) -> Dict[str, Any]:
+        path = self._find_dataset(dataset_id)
+        if path is None:
+            raise FileNotFoundError("dataset_id 不存在")
+        df = self._load_df_cached(path)
+        safe_rows = max(3, min(int(max_rows or 10), 50))
+        columns = [str(c) for c in df.columns]
+
+        amount_col = (
+            self._best_match_column("销售金额", columns)
+            or self._best_match_column("金额", columns)
+            or self._best_match_column("成交金额", columns)
+            or self._best_match_column("revenue", columns)
+            or self._best_match_column("sales", columns)
+            or self._best_match_column("gmv", columns)
+            or self._best_match_column("amount", columns)
+        )
+        customer_col = (
+            self._best_match_column("客户", columns)
+            or self._best_match_column("客户名称", columns)
+            or self._best_match_column("交易对方", columns)
+            or self._best_match_column("交易对象", columns)
+            or self._best_match_column("customer", columns)
+            or self._best_match_column("counterparty", columns)
+        )
+        date_col = (
+            self._best_match_column("交易时间", columns)
+            or self._best_match_column("订单日期", columns)
+            or self._best_match_column("日期", columns)
+            or self._best_match_column("date", columns)
+            or self._best_match_column("created_at", columns)
+        )
+
+        available = {
+            "amount_col": amount_col,
+            "customer_col": customer_col,
+            "date_col": date_col,
+            "columns": columns,
+        }
+
+        if not amount_col:
+            summary = "当前数据缺少可识别的销售金额字段，已输出可分析范围说明。"
+            insights = [
+                {
+                    "finding": "销售金额字段缺失，无法计算营收指标",
+                    "evidence": f"现有字段: {', '.join(columns[:12])}" if columns else "字段为空",
+                    "suggestion": "请补充金额/销售额字段后重试自动分析。",
+                    "priority": "high",
+                    "impact_estimation": "定性：补齐字段后可输出营收规模、客户贡献和趋势建议。",
+                },
+                {
+                    "finding": "仍可进行基础数据质量检查",
+                    "evidence": f"当前数据 {int(df.shape[0])} 行，{int(df.shape[1])} 列。",
+                    "suggestion": "先核对关键业务字段命名并统一口径（金额、时间、客户）。",
+                    "priority": "medium",
+                    "impact_estimation": "定性：可降低后续分析误判风险。",
+                },
+                {
+                    "finding": "建议建立销售数据最小字段规范",
+                    "evidence": "最小推荐字段：金额、日期、客户。",
+                    "suggestion": "在导入流程增加字段校验提示，缺失即提示用户补齐。",
+                    "priority": "medium",
+                    "impact_estimation": "定性：提升自动分析成功率与建议可信度。",
+                },
+            ]
+            return {
+                "session_id": uuid.uuid4().hex,
+                "dataset_id": dataset_id,
+                "topic": "sales",
+                "summary": summary,
+                "insights": insights,
+                "tables": [],
+                "plots": [],
+                "confidence": "low",
+                "analysis_scope": "limited",
+                "available_fields": available,
+            }
+
+        amount = pd.to_numeric(df[amount_col], errors="coerce").fillna(0.0)
+        total_sales = float(amount.sum())
+        avg_sales = float(amount.mean()) if len(amount) else 0.0
+        p90_sales = float(amount.quantile(0.9)) if len(amount) else 0.0
+        order_cnt = int(len(df))
+        high_value_threshold = p90_sales if p90_sales > 0 else avg_sales
+        high_value_cnt = int((amount >= high_value_threshold).sum()) if high_value_threshold > 0 else 0
+
+        insights: List[Dict[str, Any]] = []
+        tables: List[Dict[str, Any]] = []
+
+        insights.append(
+            {
+                "finding": "销售规模与客单价已形成基础盘点",
+                "evidence": f"总销售额={total_sales:.2f}，订单数={order_cnt}，平均每单={avg_sales:.2f}。",
+                "suggestion": "将平均客单价作为周度核心指标，持续跟踪波动并拆解来源。",
+                "priority": "high",
+                "impact_estimation": "量化：客单价每提升 5%，理论总销售额可提升约 5%。",
+            }
+        )
+
+        if customer_col:
+            customer_sales = (
+                pd.DataFrame({"customer": df[customer_col].astype(str), "amount": amount})
+                .groupby("customer")["amount"]
+                .sum()
+                .sort_values(ascending=False)
+            )
+            top_rows = customer_sales.head(safe_rows).reset_index()
+            top_rows.columns = [customer_col, "sales_sum"]
+            table_rows = [
+                {
+                    customer_col: str(r[customer_col]),
+                    "sales_sum": float(r["sales_sum"]),
+                }
+                for _, r in top_rows.iterrows()
+            ]
+            tables.append({"name": "top_customers", "rows": table_rows})
+            top1_ratio = float(customer_sales.iloc[0] / total_sales) if len(customer_sales) and total_sales > 0 else 0.0
+            insights.append(
+                {
+                    "finding": "客户贡献集中度可识别",
+                    "evidence": f"Top1 客户销售占比约 {top1_ratio * 100:.2f}%，客户数={int(customer_sales.shape[0])}。",
+                    "suggestion": "对 Top 客户建立分层运营策略，同时扩展腰部客户以降低集中风险。",
+                    "priority": "high" if top1_ratio >= 0.3 else "medium",
+                    "impact_estimation": (
+                        f"量化：若腰部客户转化提升 10%，预期可新增约 {total_sales * 0.1:.2f} 销售额。"
+                        if total_sales > 0
+                        else "定性：可优化收入结构稳定性。"
+                    ),
+                }
+            )
+        else:
+            insights.append(
+                {
+                    "finding": "缺少客户维度字段，无法输出客户结构分析",
+                    "evidence": f"识别到金额字段 `{amount_col}`，但未识别客户字段。",
+                    "suggestion": "建议补充客户字段后再进行客户贡献和分层建议。",
+                    "priority": "medium",
+                    "impact_estimation": "定性：补齐客户维度后可输出更可执行的运营建议。",
+                }
+            )
+
+        if date_col:
+            dt_series = pd.to_datetime(df[date_col], errors="coerce")
+            valid = dt_series.notna()
+            if bool(valid.any()):
+                trend_df = pd.DataFrame(
+                    {
+                        "period": dt_series[valid].dt.to_period("M").astype(str),
+                        "amount": amount[valid],
+                    }
+                )
+                monthly = trend_df.groupby("period")["amount"].sum().sort_index()
+                if len(monthly) >= 2:
+                    growth = float((monthly.iloc[-1] - monthly.iloc[-2]) / monthly.iloc[-2]) if monthly.iloc[-2] != 0 else 0.0
+                    trend_rows = [{"period": str(k), "sales_sum": float(v)} for k, v in monthly.tail(safe_rows).items()]
+                    tables.append({"name": "monthly_trend", "rows": trend_rows})
+                    insights.append(
+                        {
+                            "finding": "销售趋势可追踪到月度变化",
+                            "evidence": f"最近两期环比变化约 {growth * 100:.2f}%，最近周期={monthly.index[-1]}。",
+                            "suggestion": "对下降周期做原因排查（渠道、促销、客群），对增长周期复用成功策略。",
+                            "priority": "high" if growth < -0.05 else "medium",
+                            "impact_estimation": (
+                                f"量化：若恢复至上期水平，预计可回补约 {max(monthly.iloc[-2] - monthly.iloc[-1], 0):.2f} 销售额。"
+                                if growth < 0
+                                else "定性：保持当前增长节奏可持续提升销售规模。"
+                            ),
+                        }
+                    )
+
+        if len(insights) < 3:
+            insights.append(
+                {
+                    "finding": "高价值订单识别可用于资源倾斜",
+                    "evidence": f"P90 阈值约 {high_value_threshold:.2f}，高价值订单数={high_value_cnt}。",
+                    "suggestion": "对高价值订单来源进行专项运营，提高复购与转介绍转化。",
+                    "priority": "medium",
+                    "impact_estimation": "定性：聚焦高价值订单可提升投放效率。",
+                }
+            )
+
+        summary = (
+            f"已完成销售主题自动分析：识别到金额字段 `{amount_col}`，"
+            f"总销售额 {total_sales:.2f}，输出 {len(insights)} 条建议。"
+        )
+        confidence = "high" if customer_col and date_col else "medium"
+        return {
+            "session_id": uuid.uuid4().hex,
+            "dataset_id": dataset_id,
+            "topic": "sales",
+            "summary": summary,
+            "insights": insights[: max(3, safe_rows)],
+            "tables": tables,
+            "plots": [],
+            "confidence": confidence,
+            "analysis_scope": "sales",
+            "available_fields": available,
+        }
+
+    def export_insights_report(self, report: Dict[str, Any], export_format: str = "markdown") -> Dict[str, Any]:
+        fmt = str(export_format or "markdown").strip().lower()
+        if fmt not in {"markdown", "pdf"}:
+            raise ValueError("仅支持 markdown 或 pdf")
+        session_id = uuid.uuid4().hex
+        out_dir = self.sessions / session_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        md_text = self._render_insights_markdown(report)
+
+        if fmt == "markdown":
+            filename = "business_insights.md"
+            out_path = out_dir / filename
+            out_path.write_text(md_text, encoding="utf-8")
+            return {
+                "session_id": session_id,
+                "format": "markdown",
+                "filename": filename,
+                "download_url": f"/sessions/{session_id}/{filename}",
+            }
+
+        filename = "business_insights.pdf"
+        out_path = out_dir / filename
+        self._render_insights_pdf(markdown_text=md_text, out_path=out_path)
+        return {
+            "session_id": session_id,
+            "format": "pdf",
+            "filename": filename,
+            "download_url": f"/sessions/{session_id}/{filename}",
+        }
+
     def get_record_detail(self, session_id: str) -> Dict[str, Any]:
         path = self.sessions / session_id / "result.json"
         if not path.exists():
@@ -2078,6 +2307,117 @@ class DataInterpreterAgent:
         if pd.isna(value):
             return None
         return str(value)
+
+    @staticmethod
+    def _render_insights_markdown(report: Dict[str, Any]) -> str:
+        dataset_id = str(report.get("dataset_id", ""))
+        topic = str(report.get("topic", "sales"))
+        summary = str(report.get("summary", ""))
+        confidence = str(report.get("confidence", "medium"))
+        insights = report.get("insights", [])
+        if not isinstance(insights, list):
+            insights = []
+
+        lines = [
+            "# 商业自动分析报告",
+            "",
+            f"- 数据集ID: `{dataset_id}`",
+            f"- 主题: `{topic}`",
+            f"- 置信度: `{confidence}`",
+            "",
+            "## 摘要",
+            summary or "无摘要",
+            "",
+            "## 建议清单",
+        ]
+        if not insights:
+            lines.append("- 暂无建议")
+        else:
+            for idx, item in enumerate(insights, 1):
+                if not isinstance(item, dict):
+                    continue
+                lines.extend(
+                    [
+                        f"### 建议 {idx}",
+                        f"- 发现: {item.get('finding', '')}",
+                        f"- 证据: {item.get('evidence', '')}",
+                        f"- 建议动作: {item.get('suggestion', '')}",
+                        f"- 优先级: {item.get('priority', 'medium')}",
+                        f"- 影响预估: {item.get('impact_estimation', '')}",
+                        "",
+                    ]
+                )
+
+        tables = report.get("tables", [])
+        if isinstance(tables, list) and tables:
+            lines.extend(["## 关键表格"])
+            for table in tables:
+                if not isinstance(table, dict):
+                    continue
+                name = str(table.get("name", "table"))
+                rows = table.get("rows", [])
+                lines.append(f"### {name}")
+                if isinstance(rows, list) and rows:
+                    for row in rows[:20]:
+                        lines.append(f"- {DataInterpreterAgent._to_json_safe(row)}")
+                else:
+                    lines.append("- 无数据")
+                lines.append("")
+        return "\n".join(lines).strip() + "\n"
+
+    @staticmethod
+    def _render_insights_pdf(markdown_text: str, out_path: Path) -> None:
+        lines = (markdown_text or "").splitlines()
+        if not lines:
+            lines = ["Business Insights Report", "No content"]
+        max_lines = 48
+        lines = lines[:max_lines]
+
+        def esc(text: str) -> str:
+            ascii_text = str(text).encode("ascii", "replace").decode("ascii")
+            return ascii_text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+        stream_lines = ["BT", "/F1 10 Tf", "40 800 Td"]
+        first = True
+        for raw in lines:
+            line = esc(raw[:120])
+            if first:
+                stream_lines.append(f"({line}) Tj")
+                first = False
+            else:
+                stream_lines.append("0 -14 Td")
+                stream_lines.append(f"({line}) Tj")
+        stream_lines.append("ET")
+        stream = "\n".join(stream_lines).encode("latin-1", "replace")
+
+        objects: List[bytes] = []
+        objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
+        objects.append(b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        objects.append(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>")
+        objects.append(f"<< /Length {len(stream)} >>\nstream\n".encode("latin-1") + stream + b"\nendstream")
+        objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+
+        out = bytearray()
+        out.extend(b"%PDF-1.4\n")
+        offsets = [0]
+        for idx, obj in enumerate(objects, start=1):
+            offsets.append(len(out))
+            out.extend(f"{idx} 0 obj\n".encode("latin-1"))
+            out.extend(obj)
+            out.extend(b"\nendobj\n")
+
+        xref_pos = len(out)
+        out.extend(f"xref\n0 {len(objects) + 1}\n".encode("latin-1"))
+        out.extend(b"0000000000 65535 f \n")
+        for off in offsets[1:]:
+            out.extend(f"{off:010d} 00000 n \n".encode("latin-1"))
+        out.extend(
+            (
+                f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+                f"startxref\n{xref_pos}\n%%EOF\n"
+            ).encode("latin-1")
+        )
+        out_path.write_bytes(bytes(out))
 
     @staticmethod
     def _split_questions(question: str) -> List[str]:

@@ -72,6 +72,18 @@ class DatasetAliasRequest(BaseModel):
     alias: str = ""
 
 
+class InsightsAutoRequest(BaseModel):
+    dataset_id: str = Field(..., description="目标数据集 ID")
+    max_rows: int = Field(default=10, ge=3, le=50)
+
+
+class InsightsExportRequest(BaseModel):
+    dataset_id: str = Field(..., description="目标数据集 ID")
+    export_format: str = Field(default="markdown", description="markdown|pdf")
+    max_rows: int = Field(default=10, ge=3, le=50)
+    report: dict = Field(default_factory=dict)
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -298,3 +310,33 @@ def tools_select(req: ToolSelectionRequest) -> dict:
 @app.post("/tools/{tool_id}/enabled")
 def tools_enable(tool_id: str, req: ToolEnableRequest) -> dict:
     return agent.set_tool_enabled(tool_id=tool_id, enabled=req.enabled)
+
+
+@app.get("/insights")
+def insights_page() -> FileResponse:
+    return FileResponse(str(STATIC_DIR / "insights.html"))
+
+
+@app.post("/insights/auto")
+def insights_auto(req: InsightsAutoRequest) -> dict:
+    try:
+        return agent.auto_sales_insights(dataset_id=req.dataset_id, max_rows=req.max_rows)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"自动分析失败: {exc}") from exc
+
+
+@app.post("/insights/export")
+def insights_export(req: InsightsExportRequest) -> dict:
+    try:
+        report = req.report if isinstance(req.report, dict) and req.report else agent.auto_sales_insights(dataset_id=req.dataset_id, max_rows=req.max_rows)
+        return agent.export_insights_report(report=report, export_format=req.export_format)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"导出失败: {exc}") from exc
