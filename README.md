@@ -41,6 +41,13 @@ cd <PROJECT_ROOT>
 ./scripts/run_local_services.sh
 ```
 
+关闭服务：
+
+```bash
+cd <PROJECT_ROOT>
+./scripts/stop_local_services.sh
+```
+
 前端入口（推荐）：`<PROJECT_URL>`
 接口文档中心：`<PROJECT_URL>/api-docs`
 如果系统里有多个 Python 环境，建议显式指定：
