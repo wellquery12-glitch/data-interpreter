@@ -24,3 +24,10 @@ pytest -q tests/test_insights.py tests/test_agent_recovery.py tests/test_tools_h
 ## 5. 风险与说明
 - PDF 导出采用轻量文本 PDF 生成方式，优先保证稳定性与可下载性。
 - 中文在极少数字体环境下可能存在显示差异，不影响导出成功。
+
+## 6. 需求变更后的补充验证（2026-03-11）
+- 新增主题单选：销售/运营/财务/客户。
+- 新增用户需求输入并参与自动分析。
+- 修复报告结果查看：结果区域支持滚动，新增图表展示。
+- 修复 PDF 导出乱码：采用 CJK 字体映射输出（`STSong-Light` + `UniGB-UCS2-H`）。
+- 执行结果：通过（见 34 passed）。

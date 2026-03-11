@@ -255,6 +255,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
   margin: 6px 0;
 }
 
+.insights-report-scroll {
+  max-height: 62vh;
+  overflow: auto;
+  padding-right: 6px;
+}
+
 pre {
   background: #0b1020;
   color: #d8e0ff;

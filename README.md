@@ -126,8 +126,8 @@ TOOL_BACKEND_PUBLIC_URL=<PROJECT_URL> ./scripts/run_local_services.sh
 - `GET /bugs/summary?limit=60`: 错误类型聚合统计（按意图+错误信息，含是否已修复标记）
 
 5) 商业自动分析（销售优先）
-- `POST /insights/auto`: 一键生成销售主题自动分析与建议（需 `dataset_id`）
-- `POST /insights/export`: 导出商业分析报告（`markdown|pdf`）
+- `POST /insights/auto`: 自动生成商业分析与建议（`dataset_id + topic + requirement`）
+- `POST /insights/export`: 导出商业分析报告（`markdown|pdf`，支持携带 `topic + requirement`）
 - `GET /insights`: 商业建议页面入口
 
 ## 智能体策略

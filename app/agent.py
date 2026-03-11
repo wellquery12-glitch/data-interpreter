@@ -310,12 +310,23 @@ class DataInterpreterAgent:
             "sample_rows": sample,
         }
 
-    def auto_sales_insights(self, dataset_id: str, max_rows: int = 10) -> Dict[str, Any]:
+    def auto_sales_insights(
+        self,
+        dataset_id: str,
+        max_rows: int = 10,
+        requirement: str = "",
+        topic: str = "sales",
+    ) -> Dict[str, Any]:
         path = self._find_dataset(dataset_id)
         if path is None:
             raise FileNotFoundError("dataset_id 不存在")
         df = self._load_df_cached(path)
         safe_rows = max(3, min(int(max_rows or 10), 50))
+        topic_norm = str(topic or "sales").strip().lower() or "sales"
+        session_id = uuid.uuid4().hex
+        session_dir = self.sessions / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+        requirement_text = str(requirement or "").strip()
         columns = [str(c) for c in df.columns]
 
         amount_col = (
@@ -376,9 +387,10 @@ class DataInterpreterAgent:
                 },
             ]
             return {
-                "session_id": uuid.uuid4().hex,
+                "session_id": session_id,
                 "dataset_id": dataset_id,
-                "topic": "sales",
+                "topic": topic_norm,
+                "requirement": requirement_text,
                 "summary": summary,
                 "insights": insights,
                 "tables": [],
@@ -398,6 +410,9 @@ class DataInterpreterAgent:
 
         insights: List[Dict[str, Any]] = []
         tables: List[Dict[str, Any]] = []
+        plots: List[str] = []
+        customer_sales = None
+        monthly = None
 
         insights.append(
             {
@@ -491,21 +506,49 @@ class DataInterpreterAgent:
                 }
             )
 
+        if customer_sales is not None and len(customer_sales) > 0:
+            top_for_plot = customer_sales.head(min(8, len(customer_sales)))
+            p = self._save_insights_plot(
+                session_dir=session_dir,
+                filename="top_customers.png",
+                title="Top Customers by Sales",
+                x_labels=[str(x) for x in top_for_plot.index.tolist()],
+                y_values=[float(v) for v in top_for_plot.values.tolist()],
+                chart_type="bar",
+            )
+            if p:
+                plots.append(f"/sessions/{session_id}/{p}")
+        if monthly is not None and len(monthly) > 0:
+            trend_for_plot = monthly.tail(min(12, len(monthly)))
+            p = self._save_insights_plot(
+                session_dir=session_dir,
+                filename="monthly_trend.png",
+                title="Monthly Sales Trend",
+                x_labels=[str(x) for x in trend_for_plot.index.tolist()],
+                y_values=[float(v) for v in trend_for_plot.values.tolist()],
+                chart_type="line",
+            )
+            if p:
+                plots.append(f"/sessions/{session_id}/{p}")
+
         summary = (
-            f"已完成销售主题自动分析：识别到金额字段 `{amount_col}`，"
+            f"已完成{topic_norm}主题自动分析：识别到金额字段 `{amount_col}`，"
             f"总销售额 {total_sales:.2f}，输出 {len(insights)} 条建议。"
         )
+        if requirement_text:
+            summary += f" 已结合你的需求“{requirement_text}”生成建议。"
         confidence = "high" if customer_col and date_col else "medium"
         return {
-            "session_id": uuid.uuid4().hex,
+            "session_id": session_id,
             "dataset_id": dataset_id,
-            "topic": "sales",
+            "topic": topic_norm,
+            "requirement": requirement_text,
             "summary": summary,
             "insights": insights[: max(3, safe_rows)],
             "tables": tables,
-            "plots": [],
+            "plots": plots,
             "confidence": confidence,
-            "analysis_scope": "sales",
+            "analysis_scope": topic_norm,
             "available_fields": available,
         }
 
@@ -538,6 +581,88 @@ class DataInterpreterAgent:
             "filename": filename,
             "download_url": f"/sessions/{session_id}/{filename}",
         }
+
+    def auto_business_insights(
+        self,
+        dataset_id: str,
+        topic: str = "sales",
+        requirement: str = "",
+        max_rows: int = 10,
+    ) -> Dict[str, Any]:
+        topic_norm = str(topic or "sales").strip().lower()
+        if topic_norm not in {"sales", "operations", "finance", "customer"}:
+            topic_norm = "sales"
+        if topic_norm == "sales":
+            return self.auto_sales_insights(
+                dataset_id=dataset_id,
+                max_rows=max_rows,
+                requirement=requirement,
+                topic=topic_norm,
+            )
+        return self._auto_non_sales_insights(
+            dataset_id=dataset_id,
+            topic=topic_norm,
+            requirement=requirement,
+            max_rows=max_rows,
+        )
+
+    def _auto_non_sales_insights(
+        self,
+        dataset_id: str,
+        topic: str,
+        requirement: str,
+        max_rows: int,
+    ) -> Dict[str, Any]:
+        base = self.auto_sales_insights(
+            dataset_id=dataset_id,
+            max_rows=max_rows,
+            requirement=requirement,
+            topic=topic,
+        )
+        topic_map = {
+            "operations": ("运营", "履约效率、时效和成本"),
+            "finance": ("财务", "收支结构、异常波动和风险控制"),
+            "customer": ("客户", "客户分层、贡献和留存"),
+        }
+        cname, focus = topic_map.get(topic, ("业务", "关键指标"))
+        insights = base.get("insights", [])
+        if isinstance(insights, list):
+            for item in insights:
+                if isinstance(item, dict) and str(item.get("suggestion", "")).strip():
+                    item["suggestion"] = f"[{cname}] {item['suggestion']}"
+        req = str(requirement or "").strip()
+        req_text = f"；已结合需求“{req}”。" if req else "。"
+        base["summary"] = f"已按{cname}主题自动分析，重点关注{focus}{req_text}"
+        base["topic"] = topic
+        base["analysis_scope"] = topic
+        return base
+
+    @staticmethod
+    def _save_insights_plot(
+        session_dir: Path,
+        filename: str,
+        title: str,
+        x_labels: List[str],
+        y_values: List[float],
+        chart_type: str = "bar",
+    ) -> str:
+        if not x_labels or not y_values or len(x_labels) != len(y_values):
+            return ""
+        try:
+            fig, ax = plt.subplots(figsize=(8, 4))
+            if chart_type == "line":
+                ax.plot(x_labels, y_values, marker="o", color="#0f766e", linewidth=2.0)
+            else:
+                ax.bar(x_labels, y_values, color="#0f766e")
+            ax.set_title(title)
+            ax.tick_params(axis="x", rotation=30, labelsize=8)
+            fig.tight_layout()
+            out = session_dir / filename
+            fig.savefig(out)
+            plt.close(fig)
+            return filename
+        except Exception:  # noqa: BLE001
+            return ""
 
     def get_record_detail(self, session_id: str) -> Dict[str, Any]:
         path = self.sessions / session_id / "result.json"
@@ -2312,6 +2437,7 @@ class DataInterpreterAgent:
     def _render_insights_markdown(report: Dict[str, Any]) -> str:
         dataset_id = str(report.get("dataset_id", ""))
         topic = str(report.get("topic", "sales"))
+        requirement = str(report.get("requirement", ""))
         summary = str(report.get("summary", ""))
         confidence = str(report.get("confidence", "medium"))
         insights = report.get("insights", [])
@@ -2323,6 +2449,7 @@ class DataInterpreterAgent:
             "",
             f"- 数据集ID: `{dataset_id}`",
             f"- 主题: `{topic}`",
+            f"- 用户需求: `{requirement}`" if requirement else "- 用户需求: `未填写`",
             f"- 置信度: `{confidence}`",
             "",
             "## 摘要",
@@ -2363,39 +2490,56 @@ class DataInterpreterAgent:
                 else:
                     lines.append("- 无数据")
                 lines.append("")
+        plots = report.get("plots", [])
+        if isinstance(plots, list) and plots:
+            lines.extend(["## 图表链接"])
+            for p in plots:
+                lines.append(f"- {p}")
         return "\n".join(lines).strip() + "\n"
 
     @staticmethod
     def _render_insights_pdf(markdown_text: str, out_path: Path) -> None:
-        lines = (markdown_text or "").splitlines()
-        if not lines:
-            lines = ["Business Insights Report", "No content"]
-        max_lines = 48
-        lines = lines[:max_lines]
+        raw_lines = (markdown_text or "").splitlines()
+        if not raw_lines:
+            raw_lines = ["商业自动分析报告", "无内容"]
 
-        def esc(text: str) -> str:
-            ascii_text = str(text).encode("ascii", "replace").decode("ascii")
-            return ascii_text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        lines: List[str] = []
+        for raw in raw_lines:
+            txt = str(raw or "")
+            if len(txt) <= 40:
+                lines.append(txt)
+                continue
+            for i in range(0, len(txt), 40):
+                lines.append(txt[i : i + 40])
+        lines = lines[:70]
+
+        def to_hex_utf16be(text: str) -> str:
+            return text.encode("utf-16-be").hex().upper()
 
         stream_lines = ["BT", "/F1 10 Tf", "40 800 Td"]
         first = True
         for raw in lines:
-            line = esc(raw[:120])
+            hex_text = to_hex_utf16be(raw)
             if first:
-                stream_lines.append(f"({line}) Tj")
+                stream_lines.append(f"<{hex_text}> Tj")
                 first = False
             else:
                 stream_lines.append("0 -14 Td")
-                stream_lines.append(f"({line}) Tj")
+                stream_lines.append(f"<{hex_text}> Tj")
         stream_lines.append("ET")
-        stream = "\n".join(stream_lines).encode("latin-1", "replace")
+        stream = "\n".join(stream_lines).encode("latin-1")
 
         objects: List[bytes] = []
         objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
         objects.append(b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
         objects.append(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>")
         objects.append(f"<< /Length {len(stream)} >>\nstream\n".encode("latin-1") + stream + b"\nendstream")
-        objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        objects.append(
+            b"<< /Type /Font /Subtype /Type0 /BaseFont /STSong-Light /Encoding /UniGB-UCS2-H /DescendantFonts [6 0 R] >>"
+        )
+        objects.append(
+            b"<< /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >> /DW 1000 >>"
+        )
 
         out = bytearray()
         out.extend(b"%PDF-1.4\n")

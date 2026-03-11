@@ -3,6 +3,8 @@ let datasetsById = {};
 let currentReport = null;
 
 const datasetSelect = document.getElementById("datasetSelect");
+const topicSelect = document.getElementById("topicSelect");
+const requirementInput = document.getElementById("requirementInput");
 const refreshBtn = document.getElementById("refreshBtn");
 const datasetInfo = document.getElementById("datasetInfo");
 const maxRowsInput = document.getElementById("maxRowsInput");
@@ -13,6 +15,7 @@ const hintText = document.getElementById("hintText");
 const summaryText = document.getElementById("summaryText");
 const confidenceTag = document.getElementById("confidenceTag");
 const insightsWrap = document.getElementById("insightsWrap");
+const plotsWrap = document.getElementById("plotsWrap");
 const tablesWrap = document.getElementById("tablesWrap");
 
 function setBusy(btn, busy, text) {
@@ -76,6 +79,15 @@ function renderReport(report) {
       })
       .join("");
   }
+
+  const plots = Array.isArray(report.plots) ? report.plots : [];
+  if (!plots.length) {
+    plotsWrap.innerHTML = "<p class='muted'>暂无图表</p>";
+  } else {
+    plotsWrap.innerHTML = plots
+      .map((p, i) => `<figure style="margin:8px 0;"><img src="${escapeHtml(p)}" alt="plot-${i}" style="max-width:100%; border:1px solid #e5e7eb; border-radius:8px;" /></figure>`)
+      .join("");
+  }
 }
 
 function updateDatasetInfo() {
@@ -130,6 +142,8 @@ async function analyze() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         dataset_id: datasetId,
+        topic: topicSelect.value || "sales",
+        requirement: (requirementInput.value || "").trim(),
         max_rows: Math.max(3, Math.min(50, Number(maxRowsInput.value || 10)))
       })
     });
@@ -160,6 +174,8 @@ async function exportReport(format) {
       body: JSON.stringify({
         dataset_id: datasetId,
         export_format: format,
+        topic: topicSelect.value || "sales",
+        requirement: (requirementInput.value || "").trim(),
         max_rows: Math.max(3, Math.min(50, Number(maxRowsInput.value || 10))),
         report: currentReport || {}
       })

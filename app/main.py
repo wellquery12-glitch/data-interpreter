@@ -74,12 +74,16 @@ class DatasetAliasRequest(BaseModel):
 
 class InsightsAutoRequest(BaseModel):
     dataset_id: str = Field(..., description="目标数据集 ID")
+    topic: str = Field(default="sales", description="sales|operations|finance|customer")
+    requirement: str = Field(default="", description="用户的具体分析需求")
     max_rows: int = Field(default=10, ge=3, le=50)
 
 
 class InsightsExportRequest(BaseModel):
     dataset_id: str = Field(..., description="目标数据集 ID")
     export_format: str = Field(default="markdown", description="markdown|pdf")
+    topic: str = Field(default="sales", description="sales|operations|finance|customer")
+    requirement: str = Field(default="", description="用户的具体分析需求")
     max_rows: int = Field(default=10, ge=3, le=50)
     report: dict = Field(default_factory=dict)
 
@@ -320,7 +324,12 @@ def insights_page() -> FileResponse:
 @app.post("/insights/auto")
 def insights_auto(req: InsightsAutoRequest) -> dict:
     try:
-        return agent.auto_sales_insights(dataset_id=req.dataset_id, max_rows=req.max_rows)
+        return agent.auto_business_insights(
+            dataset_id=req.dataset_id,
+            topic=req.topic,
+            requirement=req.requirement,
+            max_rows=req.max_rows,
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -332,7 +341,16 @@ def insights_auto(req: InsightsAutoRequest) -> dict:
 @app.post("/insights/export")
 def insights_export(req: InsightsExportRequest) -> dict:
     try:
-        report = req.report if isinstance(req.report, dict) and req.report else agent.auto_sales_insights(dataset_id=req.dataset_id, max_rows=req.max_rows)
+        report = (
+            req.report
+            if isinstance(req.report, dict) and req.report
+            else agent.auto_business_insights(
+                dataset_id=req.dataset_id,
+                topic=req.topic,
+                requirement=req.requirement,
+                max_rows=req.max_rows,
+            )
+        )
         return agent.export_insights_report(report=report, export_format=req.export_format)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
