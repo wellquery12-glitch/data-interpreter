@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>接口文档中心 - Data Interpreter</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="page-head">
+      <div class="head-row">
+        <div>
+          <h1>接口文档中心</h1>
+          <p class="sub">统一查看后端服务 API 文档，支持跳转 Swagger 页面和前端内嵌预览。</p>
+        </div>
+        <div class="head-actions">
+          <a class="btn-link" href="/">返回控制台</a>
+          <button id="refreshDocsBtn" type="button">刷新状态</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="layout">
+      <section class="left-col">
+        <section class="panel">
+          <h2>服务文档列表</h2>
+          <p id="docsHint" class="muted">加载中...</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>服务</th>
+                  <th>状态</th>
+                  <th>地址</th>
+                  <th>文档</th>
+                </tr>
+              </thead>
+              <tbody id="docsTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="right-col">
+        <section class="panel">
+          <h2>文档预览</h2>
+          <p id="previewHint" class="muted">点击左侧“预览”查看 Swagger UI。</p>
+          <iframe id="docsPreviewFrame" class="docs-preview-frame" title="api docs preview"></iframe>
+        </section>
+      </section>
+    </div>
+  </main>
+
+  <script src="/static/api_docs.js"></script>
+</body>
+</html>

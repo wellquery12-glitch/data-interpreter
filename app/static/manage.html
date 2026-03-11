@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLM 管理 - Data Interpreter</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="page-head">
+      <div class="head-row">
+        <div>
+          <h1>LLM 管理</h1>
+          <p class="sub">配置模型接入、预算阈值与单价，并查看每次链路 token 消耗和成本。</p>
+        </div>
+        <div class="head-actions">
+          <a class="btn-link" href="/tools">工具管理</a>
+          <a class="btn-link" href="/api-docs">接口文档</a>
+          <a class="btn-link" href="/">返回控制台</a>
+        </div>
+      </div>
+    </header>
+
+    <div class="layout">
+      <section class="left-col">
+        <section class="panel">
+          <h2>连接配置</h2>
+          <div class="row">
+            <label class="label-inline" for="enabledInput">启用 LLM</label>
+            <input id="enabledInput" type="checkbox" />
+          </div>
+          <label class="label" for="providerInput">Provider</label>
+          <input id="providerInput" type="text" placeholder="openai_compatible" />
+          <label class="label" for="modelInput">模型名</label>
+          <input id="modelInput" type="text" placeholder="gpt-4o-mini / qwen-plus / deepseek-chat" />
+          <label class="label" for="baseUrlInput">Base URL（可选）</label>
+          <input id="baseUrlInput" type="text" placeholder="https://api.openai.com/v1" />
+          <label class="label" for="apiKeyInput">API Key</label>
+          <input id="apiKeyInput" type="password" placeholder="sk-..." />
+        </section>
+
+        <section class="panel">
+          <h2>预算与单价</h2>
+          <label class="label" for="maxTokensInput">Token 总额度</label>
+          <input id="maxTokensInput" type="number" min="1000" step="1000" />
+          <label class="label" for="warnRatioInput">提醒阈值比例（0.1~0.99）</label>
+          <input id="warnRatioInput" type="number" min="0.1" max="0.99" step="0.01" />
+          <label class="label" for="inPriceInput">输入单价（每百万 token）</label>
+          <input id="inPriceInput" type="number" min="0" step="0.0001" />
+          <label class="label" for="outPriceInput">输出单价（每百万 token）</label>
+          <input id="outPriceInput" type="number" min="0" step="0.0001" />
+          <label class="label" for="currencyInput">币种</label>
+          <input id="currencyInput" type="text" placeholder="USD" />
+
+          <div class="row" style="margin-top: 12px;">
+            <button id="saveBtn" type="button">保存配置</button>
+            <button id="resetBtn" type="button">重置资源统计</button>
+          </div>
+          <p id="saveHint" class="muted"></p>
+        </section>
+      </section>
+
+      <section class="right-col">
+        <section class="panel">
+          <div class="row" style="justify-content: space-between; margin-bottom: 8px;">
+            <h2 style="margin: 0;">服务拓扑状态</h2>
+            <button id="refreshServicesBtn" type="button">刷新状态</button>
+          </div>
+          <p id="servicesHint" class="muted">查看前端网关与执行链路后端服务在线状态。</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>服务</th>
+                  <th>角色</th>
+                  <th>状态</th>
+                  <th>地址</th>
+                  <th>说明</th>
+                </tr>
+              </thead>
+              <tbody id="servicesBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>资源状态</h2>
+          <p><strong>状态：</strong><span id="quotaStatus" class="status-tag">-</span></p>
+          <p id="quotaMessage" class="muted"></p>
+          <p id="quotaNumbers" class="muted"></p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>指标</th>
+                  <th>值</th>
+                </tr>
+              </thead>
+              <tbody id="usageSummary"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>最近链路消耗（最新 20 条）</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>模式</th>
+                  <th>阶段</th>
+                  <th>模型</th>
+                  <th>Prompt</th>
+                  <th>Completion</th>
+                  <th>Total</th>
+                  <th>Cost</th>
+                </tr>
+              </thead>
+              <tbody id="eventsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="row" style="justify-content: space-between; margin-bottom: 8px;">
+            <h2 style="margin: 0;">错误类型统计</h2>
+            <button id="refreshBugsBtn" type="button">刷新错误</button>
+          </div>
+          <p id="bugsHint" class="muted">按意图+错误信息聚合，并标注是否已被后续成功请求修复。</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>状态</th>
+                  <th>意图</th>
+                  <th>错误摘要</th>
+                  <th>次数</th>
+                  <th>最近发生</th>
+                  <th>修复时间</th>
+                </tr>
+              </thead>
+              <tbody id="bugsBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </div>
+  </main>
+
+  <script src="/static/manage.js"></script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Data Interpreter 控制台</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="page-head">
+      <div class="head-row">
+        <div>
+          <h1>Data Interpreter 控制台</h1>
+          <p class="sub">上传数据后，直接用自然语言提问并查看分析结果。</p>
+        </div>
+        <div class="head-actions">
+          <a class="btn-link" href="/tools">工具管理</a>
+          <a class="btn-link" href="/manage">LLM 配置</a>
+          <a class="btn-link" href="/api-docs">接口文档</a>
+          <button id="layoutModeBtn" type="button">切到标准布局</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="left-col">
+        <section class="panel dataset-panel">
+          <h2>1. 选择数据集</h2>
+          <label class="label" for="datasetFilterInput">搜索数据集（别名/文件名/ID）</label>
+          <input id="datasetFilterInput" type="text" placeholder="输入关键字过滤数据集" />
+          <div class="row">
+            <select id="datasetSelect"></select>
+            <button id="refreshDatasetsBtn">刷新列表</button>
+          </div>
+          <div class="row" style="margin-top: 8px;">
+            <input id="datasetAliasInput" type="text" placeholder="设置当前数据集别名（可选）" />
+            <button id="saveAliasBtn" type="button">保存别名</button>
+            <button id="deleteDatasetBtn" type="button">删除数据集</button>
+          </div>
+          <p id="datasetInfo" class="muted">可先选择已有文件，或上传新文件后自动选中</p>
+          <p id="datasetAliasHint" class="muted"></p>
+          <div id="datasetPreviewWrap" class="dataset-preview"></div>
+
+          <h3>上传新文件</h3>
+          <div class="row">
+            <input id="fileInput" type="file" accept=".csv,.xlsx" />
+            <button id="uploadBtn">上传</button>
+          </div>
+          <p id="uploadInfo" class="muted">尚未上传数据集</p>
+        </section>
+
+        <section class="panel history-panel">
+          <h2>2. 历史记录</h2>
+          <div class="row">
+            <input id="historyKeywordInput" type="text" placeholder="筛选关键词（问题/回答）" />
+            <button id="refreshHistoryBtn">刷新历史</button>
+          </div>
+          <div id="historyList" class="history-list"></div>
+          <div class="row history-pager">
+            <button id="historyPrevBtn" type="button">上一页</button>
+            <span id="historyPageInfo" class="muted">第 1 / 1 页</span>
+            <button id="historyNextBtn" type="button">下一页</button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="right-col">
+        <section class="panel query-panel">
+          <h2>3. 发起分析</h2>
+          <label class="label" for="questionInput">问题</label>
+          <textarea id="questionInput" rows="3" placeholder="例如：哪个司机运单最多？"></textarea>
+          <div id="questionTemplates" class="chips">
+            <button class="chip" type="button" data-q="哪个司机运单最多？">司机运单 Top</button>
+            <button class="chip" type="button" data-q="交易金额最多的交易对象">交易金额 Top</button>
+            <button class="chip" type="button" data-q="金额最大是多少">金额最大值</button>
+            <button class="chip" type="button" data-q="字段金额的平均值是多少">平均值</button>
+            <button class="chip" type="button" data-q="请画趋势图，按交易时间看金额变化">趋势图</button>
+          </div>
+
+          <div class="row">
+            <label class="label-inline" for="maxRowsInput">最多返回行数</label>
+            <input id="maxRowsInput" type="number" min="1" max="200" value="20" />
+            <button id="askBtn">自动分析</button>
+            <button id="smartAskBtn" type="button">智能分析</button>
+            <button id="toolAskBtn" type="button">通用模式</button>
+          </div>
+
+          <h3>执行链路图</h3>
+          <div id="executionGraphWrap" class="execution-graph-wrap">
+            <p class="muted">发起分析后展示本次分层执行链路</p>
+          </div>
+        </section>
+
+        <section class="panel result-panel">
+          <h2>4. 分析结果</h2>
+          <p><strong>状态：</strong><span id="statusTag" class="status-tag">-</span></p>
+          <p><strong>回答：</strong><span id="answerText">-</span></p>
+          <p id="errorText" class="error-text"></p>
+          <p id="errorHintText" class="muted"></p>
+          <div id="suggestionWrap" class="suggestion-wrap"></div>
+          <details>
+            <summary>查看生成代码</summary>
+            <pre id="codeText"></pre>
+          </details>
+          <details>
+            <summary>查看执行日志</summary>
+            <pre id="stdoutText"></pre>
+          </details>
+
+          <h3>结果表</h3>
+          <div id="tableWrap" class="table-wrap"></div>
+
+          <h3>图表</h3>
+          <div id="plotsWrap" class="plots-wrap"></div>
+
+          <h3>子问题结果</h3>
+          <div id="subResultsWrap" class="sub-results-wrap"></div>
+        </section>
+      </section>
+    </div>
+  </main>
+
+  <div id="plotModal" class="modal hidden">
+    <button id="closeModalBtn" class="modal-close" type="button">关闭</button>
+    <img id="modalImage" alt="plot preview" />
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>工具管理 - Data Interpreter</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="page-head">
+      <div class="head-row">
+        <div>
+          <h1>工具管理</h1>
+          <p class="sub">运行时接入远程工具包，用户可按工具包安装，并选择工具参与分析。</p>
+        </div>
+        <div class="head-actions">
+          <a class="btn-link" href="/api-docs">接口文档</a>
+          <a class="btn-link" href="/">返回控制台</a>
+        </div>
+      </div>
+    </header>
+
+    <div class="layout">
+      <section class="left-col">
+        <section class="panel">
+          <h2>按工具包安装</h2>
+          <label class="label" for="sourceUrlInput">工具平台地址</label>
+          <input id="sourceUrlInput" type="text" placeholder="http://tool-hub.company.com/api" />
+          <label class="label" for="packageIdInput">工具包 ID</label>
+          <input id="packageIdInput" type="text" placeholder="finance_basic_v1" />
+          <div class="row" style="margin-top: 10px;">
+            <button id="installPkgBtn" type="button">安装工具包</button>
+            <button id="refreshCatalogBtn" type="button">拉取可用包</button>
+          </div>
+          <p id="pkgHint" class="muted"></p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>包 ID</th>
+                  <th>名称</th>
+                  <th>描述</th>
+                  <th>版本</th>
+                </tr>
+              </thead>
+              <tbody id="catalogBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>手动添加工具</h2>
+          <label class="label" for="packageSelectInput">归属工具包</label>
+          <select id="packageSelectInput"></select>
+          <label class="label" for="toolIdInput">工具 ID</label>
+          <input id="toolIdInput" type="text" placeholder="tool_xxx" />
+          <label class="label" for="toolNameInput">工具名称</label>
+          <input id="toolNameInput" type="text" placeholder="交易对象聚合工具" />
+          <label class="label" for="toolDescInput">描述</label>
+          <input id="toolDescInput" type="text" placeholder="按交易对象聚合金额并返回TopN" />
+          <label class="label" for="toolEndpointInput">远程接口</label>
+          <input id="toolEndpointInput" type="text" placeholder="http://tool-service/api/run" />
+          <label class="label" for="toolKeywordsInput">关键词（逗号分隔）</label>
+          <input id="toolKeywordsInput" type="text" placeholder="金额,交易对象,top" />
+          <button id="addToolBtn" type="button" style="margin-top: 10px;">添加工具</button>
+        </section>
+      </section>
+
+      <section class="right-col">
+        <section class="panel">
+          <h2>已安装工具</h2>
+          <p class="muted">勾选“选中”表示该工具会被 `tool` 模式优先使用；“启用”可临时停用工具。</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>选中</th>
+                  <th>启用</th>
+                  <th>工具 ID</th>
+                  <th>名称</th>
+                  <th>描述</th>
+                  <th>输入</th>
+                  <th>输出</th>
+                </tr>
+              </thead>
+              <tbody id="installedToolsBody"></tbody>
+            </table>
+          </div>
+          <div class="row" style="margin-top: 10px;">
+            <button id="saveSelectionBtn" type="button">保存选择</button>
+            <button id="refreshStateBtn" type="button">刷新状态</button>
+          </div>
+          <p id="toolsHint" class="muted"></p>
+        </section>
+      </section>
+    </div>
+  </main>
+
+  <script src="/static/tools.js"></script>
+</body>
+</html>
