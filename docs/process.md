@@ -137,6 +137,7 @@ Codex 在本项目中同时承担以下职责：
 - 用户验证清单
 - 用户验收结论
 - 合并记录
+- 问题台账（`issues.md`，问题状态仅使用：`已解决` / `未解决`）
 
 ---
 
@@ -156,3 +157,4 @@ docs/
       validation-checklist.md
       test-report.md
       summary.md
+      issues.md

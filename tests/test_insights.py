@@ -107,4 +107,10 @@ def test_export_insights_markdown_and_pdf(tmp_path: Path) -> None:
     pdf_path = tmp_path / "sessions" / pdf["session_id"] / pdf["filename"]
     assert md_path.exists()
     assert pdf_path.exists()
-    assert b"STSong-Light" in pdf_path.read_bytes()
+    md_text = md_path.read_text(encoding="utf-8")
+    assert "![图表1](data:image/png;base64," in md_text
+    pdf_dir = tmp_path / "sessions" / pdf["session_id"]
+    assert any(p.name.startswith("plot_") and p.suffix.lower() == ".png" for p in pdf_dir.iterdir())
+    data = pdf_path.read_bytes()
+    assert data.startswith(b"%PDF")
+    assert len(data) > 1024

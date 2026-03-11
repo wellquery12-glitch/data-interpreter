@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import base64
 import difflib
 import json
 import os
 import re
+import shutil
 import uuid
 import urllib.error
 import urllib.request
@@ -559,7 +561,12 @@ class DataInterpreterAgent:
         session_id = uuid.uuid4().hex
         out_dir = self.sessions / session_id
         out_dir.mkdir(parents=True, exist_ok=True)
-        md_text = self._render_insights_markdown(report)
+        plot_assets = self._collect_export_plot_assets(report=report, out_dir=out_dir)
+        md_text = self._render_insights_markdown(
+            report=report,
+            plot_assets=plot_assets,
+            embed_images=(fmt == "markdown"),
+        )
 
         if fmt == "markdown":
             filename = "business_insights.md"
@@ -574,13 +581,90 @@ class DataInterpreterAgent:
 
         filename = "business_insights.pdf"
         out_path = out_dir / filename
-        self._render_insights_pdf(markdown_text=md_text, out_path=out_path)
+        self._render_insights_pdf(markdown_text=md_text, out_path=out_path, plot_assets=plot_assets)
         return {
             "session_id": session_id,
             "format": "pdf",
             "filename": filename,
             "download_url": f"/sessions/{session_id}/{filename}",
         }
+
+    def _collect_export_plot_assets(self, report: Dict[str, Any], out_dir: Path) -> List[Dict[str, str]]:
+        plots = report.get("plots", [])
+        if not isinstance(plots, list):
+            return []
+        assets: List[Dict[str, str]] = []
+        for idx, p in enumerate(plots, 1):
+            url = str(p or "").strip()
+            if not url:
+                continue
+            src = self._resolve_plot_url_to_local_path(url)
+            if src is None or not src.exists() or not src.is_file():
+                continue
+            ext = src.suffix.lower()
+            if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
+                continue
+            filename = f"plot_{idx}{ext}"
+            dst = out_dir / filename
+            try:
+                shutil.copy2(src, dst)
+            except Exception:  # noqa: BLE001
+                continue
+            data_uri = self._image_file_to_data_uri(dst)
+            assets.append(
+                {
+                    "source_url": url,
+                    "filename": filename,
+                    "path": str(dst),
+                    "data_uri": data_uri,
+                }
+            )
+        return assets
+
+    def _resolve_plot_url_to_local_path(self, url: str) -> Optional[Path]:
+        raw = str(url or "").strip()
+        if not raw:
+            return None
+        if raw.startswith("/sessions/"):
+            rel = Path(raw.lstrip("/"))
+            parts = rel.parts
+            if len(parts) >= 3 and parts[0] == "sessions":
+                candidate = self.sessions / Path(*parts[1:])
+                try:
+                    candidate_resolved = candidate.resolve()
+                    sessions_resolved = self.sessions.resolve()
+                except Exception:  # noqa: BLE001
+                    return None
+                if sessions_resolved == candidate_resolved or sessions_resolved in candidate_resolved.parents:
+                    return candidate_resolved
+            return None
+        p = Path(raw)
+        if p.is_absolute():
+            try:
+                resolved = p.resolve()
+                sessions_resolved = self.sessions.resolve()
+            except Exception:  # noqa: BLE001
+                return None
+            if sessions_resolved == resolved or sessions_resolved in resolved.parents:
+                return resolved
+        return None
+
+    @staticmethod
+    def _image_file_to_data_uri(path: Path) -> str:
+        ext = path.suffix.lower().lstrip(".")
+        mime = {
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "webp": "image/webp",
+        }.get(ext, "")
+        if not mime:
+            return ""
+        try:
+            b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        except Exception:  # noqa: BLE001
+            return ""
+        return f"data:{mime};base64,{b64}"
 
     def auto_business_insights(
         self,
@@ -2434,7 +2518,11 @@ class DataInterpreterAgent:
         return str(value)
 
     @staticmethod
-    def _render_insights_markdown(report: Dict[str, Any]) -> str:
+    def _render_insights_markdown(
+        report: Dict[str, Any],
+        plot_assets: Optional[List[Dict[str, str]]] = None,
+        embed_images: bool = False,
+    ) -> str:
         dataset_id = str(report.get("dataset_id", ""))
         topic = str(report.get("topic", "sales"))
         requirement = str(report.get("requirement", ""))
@@ -2490,78 +2578,125 @@ class DataInterpreterAgent:
                 else:
                     lines.append("- 无数据")
                 lines.append("")
-        plots = report.get("plots", [])
-        if isinstance(plots, list) and plots:
-            lines.extend(["## 图表链接"])
-            for p in plots:
-                lines.append(f"- {p}")
+        assets = plot_assets if isinstance(plot_assets, list) else []
+        if assets:
+            lines.extend(["## 图表"])
+            for idx, a in enumerate(assets, 1):
+                src = str(a.get("source_url", ""))
+                data_uri = str(a.get("data_uri", ""))
+                filename = str(a.get("filename", ""))
+                lines.append(f"### 图表 {idx}")
+                if embed_images and data_uri:
+                    lines.append(f"![图表{idx}]({data_uri})")
+                else:
+                    lines.append(f"- 文件: `{filename}`")
+                    if src:
+                        lines.append(f"- 来源: {src}")
+                lines.append("")
+        else:
+            plots = report.get("plots", [])
+            if isinstance(plots, list) and plots:
+                lines.extend(["## 图表链接"])
+                for p in plots:
+                    lines.append(f"- {p}")
         return "\n".join(lines).strip() + "\n"
 
     @staticmethod
-    def _render_insights_pdf(markdown_text: str, out_path: Path) -> None:
+    def _render_insights_pdf(
+        markdown_text: str,
+        out_path: Path,
+        plot_assets: Optional[List[Dict[str, str]]] = None,
+    ) -> None:
+        from PIL import Image, ImageDraw, ImageFont
+
         raw_lines = (markdown_text or "").splitlines()
         if not raw_lines:
             raw_lines = ["商业自动分析报告", "无内容"]
 
-        lines: List[str] = []
-        for raw in raw_lines:
-            txt = str(raw or "")
-            if len(txt) <= 40:
-                lines.append(txt)
+        font_candidates = [
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/Songti.ttc",
+            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+        ]
+        font = None
+        for fp in font_candidates:
+            try:
+                if Path(fp).exists():
+                    font = ImageFont.truetype(fp, size=24)
+                    break
+            except Exception:  # noqa: BLE001
                 continue
-            for i in range(0, len(txt), 40):
-                lines.append(txt[i : i + 40])
-        lines = lines[:70]
+        if font is None:
+            font = ImageFont.load_default()
 
-        def to_hex_utf16be(text: str) -> str:
-            return text.encode("utf-16-be").hex().upper()
+        width, height = 1240, 1754  # A4-ish at ~150 DPI
+        margin_x, margin_y = 70, 80
+        line_height = 38
+        max_w = width - margin_x * 2
+        max_lines_per_page = max(1, (height - margin_y * 2) // line_height)
 
-        stream_lines = ["BT", "/F1 10 Tf", "40 800 Td"]
-        first = True
-        for raw in lines:
-            hex_text = to_hex_utf16be(raw)
-            if first:
-                stream_lines.append(f"<{hex_text}> Tj")
-                first = False
-            else:
-                stream_lines.append("0 -14 Td")
-                stream_lines.append(f"<{hex_text}> Tj")
-        stream_lines.append("ET")
-        stream = "\n".join(stream_lines).encode("latin-1")
+        wrapped: List[str] = []
+        for raw in raw_lines:
+            text = str(raw or "")
+            if not text:
+                wrapped.append("")
+                continue
+            buf = ""
+            for ch in text:
+                nxt = buf + ch
+                try:
+                    tw, _ = font.getsize(nxt)
+                except Exception:  # noqa: BLE001
+                    tw = len(nxt) * 12
+                if tw <= max_w:
+                    buf = nxt
+                else:
+                    wrapped.append(buf)
+                    buf = ch
+            wrapped.append(buf)
 
-        objects: List[bytes] = []
-        objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
-        objects.append(b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
-        objects.append(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>")
-        objects.append(f"<< /Length {len(stream)} >>\nstream\n".encode("latin-1") + stream + b"\nendstream")
-        objects.append(
-            b"<< /Type /Font /Subtype /Type0 /BaseFont /STSong-Light /Encoding /UniGB-UCS2-H /DescendantFonts [6 0 R] >>"
-        )
-        objects.append(
-            b"<< /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >> /DW 1000 >>"
-        )
+        if not wrapped:
+            wrapped = ["商业自动分析报告", "无内容"]
 
-        out = bytearray()
-        out.extend(b"%PDF-1.4\n")
-        offsets = [0]
-        for idx, obj in enumerate(objects, start=1):
-            offsets.append(len(out))
-            out.extend(f"{idx} 0 obj\n".encode("latin-1"))
-            out.extend(obj)
-            out.extend(b"\nendobj\n")
+        pages: List[Image.Image] = []
+        for i in range(0, len(wrapped), max_lines_per_page):
+            chunk = wrapped[i : i + max_lines_per_page]
+            img = Image.new("RGB", (width, height), "white")
+            draw = ImageDraw.Draw(img)
+            y = margin_y
+            for line in chunk:
+                draw.text((margin_x, y), line, font=font, fill="black")
+                y += line_height
+            pages.append(img)
 
-        xref_pos = len(out)
-        out.extend(f"xref\n0 {len(objects) + 1}\n".encode("latin-1"))
-        out.extend(b"0000000000 65535 f \n")
-        for off in offsets[1:]:
-            out.extend(f"{off:010d} 00000 n \n".encode("latin-1"))
-        out.extend(
-            (
-                f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
-                f"startxref\n{xref_pos}\n%%EOF\n"
-            ).encode("latin-1")
-        )
-        out_path.write_bytes(bytes(out))
+        assets = plot_assets if isinstance(plot_assets, list) else []
+        for idx, a in enumerate(assets, 1):
+            p = Path(str(a.get("path", "")))
+            if not p.exists() or not p.is_file():
+                continue
+            try:
+                src_img = Image.open(p).convert("RGB")
+            except Exception:  # noqa: BLE001
+                continue
+            canvas = Image.new("RGB", (width, height), "white")
+            draw = ImageDraw.Draw(canvas)
+            title = f"图表 {idx}"
+            draw.text((margin_x, margin_y // 2), title, font=font, fill="black")
+            max_img_w = width - margin_x * 2
+            max_img_h = height - margin_y * 2 - 60
+            src_img.thumbnail((max_img_w, max_img_h))
+            x = (width - src_img.width) // 2
+            y = margin_y + 30 + max(0, (max_img_h - src_img.height) // 2)
+            canvas.paste(src_img, (x, y))
+            pages.append(canvas)
+
+        if not pages:
+            pages = [Image.new("RGB", (width, height), "white")]
+
+        first = pages[0]
+        rest = pages[1:]
+        first.save(out_path, "PDF", save_all=True, append_images=rest, resolution=150.0)
 
     @staticmethod
     def _split_questions(question: str) -> List[str]:
