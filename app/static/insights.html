@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>商业自动分析</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="insights-body">
+  <main class="page insights-page">
+    <header class="page-head">
+      <div class="head-row">
+        <div>
+          <h1>商业自动分析</h1>
+          <p class="sub">选择主题与数据集，输入具体需求后自动分析，并支持导出 Markdown/PDF。</p>
+        </div>
+        <div class="head-actions">
+          <a class="btn-link" href="/">返回控制台</a>
+          <a class="btn-link" href="/api-docs">接口文档</a>
+        </div>
+      </div>
+    </header>
+
+    <section class="panel">
+      <h2>1. 选择数据集</h2>
+      <div class="row">
+        <select id="datasetSelect"></select>
+        <button id="refreshBtn" type="button">刷新</button>
+      </div>
+      <p id="datasetInfo" class="muted">请选择数据集</p>
+    </section>
+
+    <section class="panel">
+      <h2>2. 生成与导出</h2>
+      <div class="row">
+        <label class="label-inline" for="topicSelect">分析主题</label>
+        <select id="topicSelect">
+          <option value="sales">销售</option>
+          <option value="operations">运营</option>
+          <option value="finance">财务</option>
+          <option value="customer">客户</option>
+        </select>
+      </div>
+      <div class="row">
+        <label class="label-inline" for="requirementInput">具体分析需求</label>
+        <textarea id="requirementInput" rows="3" placeholder="例如：重点看大客户贡献下降的原因，并给出可执行建议。"></textarea>
+      </div>
+      <div class="row">
+        <label class="label-inline" for="maxRowsInput">建议条数上限</label>
+        <input id="maxRowsInput" type="number" min="3" max="50" value="10" />
+        <button id="analyzeBtn" type="button">自动分析</button>
+        <button id="exportMdBtn" type="button">导出 Markdown</button>
+        <button id="exportPdfBtn" type="button">导出 PDF</button>
+      </div>
+      <p id="hintText" class="muted">尚未生成报告</p>
+    </section>
+
+    <section class="panel">
+      <h2>3. 报告结果</h2>
+      <div id="reportContainer" class="insights-report-scroll">
+        <p><strong>摘要：</strong><span id="summaryText">-</span></p>
+        <p><strong>置信度：</strong><span id="confidenceTag" class="status-tag">-</span></p>
+        <div id="insightsWrap" class="insights-wrap"></div>
+        <h3>关键图表</h3>
+        <div id="plotsWrap" class="plots-wrap"></div>
+        <h3>关键表格</h3>
+        <div id="tablesWrap" class="table-wrap"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/insights.js"></script>
+</body>
+</html>

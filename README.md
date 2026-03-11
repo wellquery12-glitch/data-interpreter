@@ -20,6 +20,7 @@ uvicorn app.main:app --reload --port 8010
 
 打开接口文档：`<PROJECT_URL>/docs`
 打开网页端工具：`<PROJECT_URL>/`
+打开商业建议页：`<PROJECT_URL>/insights`
 打开 LLM 管理页：`<PROJECT_URL>/manage`
 打开工具管理页：`<PROJECT_URL>/tools`
 打开接口文档中心：`<PROJECT_URL>/api-docs`
@@ -123,6 +124,11 @@ TOOL_BACKEND_PUBLIC_URL=<PROJECT_URL> ./scripts/run_local_services.sh
 - `POST /tools/{tool_id}/enabled`: 启用/停用工具
 - `GET /architecture/services`: 查看当前分层服务配置与健康状态（planner/executor/tool-backend）
 - `GET /bugs/summary?limit=60`: 错误类型聚合统计（按意图+错误信息，含是否已修复标记）
+
+5) 商业自动分析（销售优先）
+- `POST /insights/auto`: 自动生成商业分析与建议（`dataset_id + topic + requirement`）
+- `POST /insights/export`: 导出商业分析报告（`markdown|pdf`，支持携带 `topic + requirement`）
+- `GET /insights`: 商业建议页面入口
 
 ## 智能体策略
 

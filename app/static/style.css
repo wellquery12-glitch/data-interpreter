@@ -255,6 +255,37 @@ button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
   margin: 6px 0;
 }
 
+.insights-report-scroll {
+  max-height: 70vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: #ffffff;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.insights-page {
+  height: auto;
+  min-height: calc(100vh - 24px);
+}
+
+.insights-page .panel:last-of-type {
+  min-height: 0;
+}
+
+body.insights-body {
+  overflow: auto !important;
+}
+
+body.insights-body .page {
+  height: auto;
+  min-height: calc(100vh - 24px);
+}
+
 pre {
   background: #0b1020;
   color: #d8e0ff;
