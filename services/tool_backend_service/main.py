@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 
 app = FastAPI(title="Tool Backend Service", version="1.0.0")
+TOOL_BACKEND_PUBLIC_URL = os.getenv("TOOL_BACKEND_PUBLIC_URL", "").rstrip("/")
 
 PACKAGES = {
     "finance_core_v1": {
@@ -18,7 +20,7 @@ PACKAGES = {
                 "tool_id": "tool_finance_counterparty_top",
                 "name": "交易对象金额Top",
                 "description": "按交易对象汇总金额并返回Top10",
-                "endpoint": "http://127.0.0.1:8013/run/finance/counterparty_top",
+                "endpoint_path": "/run/finance/counterparty_top",
                 "method": "POST",
                 "keywords": ["交易", "金额", "top", "对象"],
                 "input_schema": {"question": "string", "data": "object"},
@@ -36,7 +38,7 @@ PACKAGES = {
                 "tool_id": "tool_ops_driver_top",
                 "name": "司机运单Top",
                 "description": "按司机统计运单次数",
-                "endpoint": "http://127.0.0.1:8013/run/ops/driver_top",
+                "endpoint_path": "/run/ops/driver_top",
                 "method": "POST",
                 "keywords": ["司机", "运单", "top", "最多"],
                 "input_schema": {"question": "string", "data": "object"},
@@ -52,6 +54,31 @@ class ToolRunPayload(BaseModel):
     dataset_id: str = ""
     max_rows: int = 20
     data: Dict[str, Any]
+
+
+def _public_base_url(request: Request) -> str:
+    if TOOL_BACKEND_PUBLIC_URL:
+        return TOOL_BACKEND_PUBLIC_URL
+    return str(request.base_url).rstrip("/")
+
+
+def _pkg_with_public_endpoints(pkg: Dict[str, Any], request: Request) -> Dict[str, Any]:
+    base = _public_base_url(request)
+    out = dict(pkg)
+    tools = []
+    for raw in pkg.get("tools", []):
+        if not isinstance(raw, dict):
+            continue
+        tool = dict(raw)
+        endpoint = str(tool.get("endpoint", "")).strip()
+        endpoint_path = str(tool.get("endpoint_path", "")).strip()
+        if endpoint_path and not endpoint:
+            endpoint = base + endpoint_path
+        tool["endpoint"] = endpoint
+        tool.pop("endpoint_path", None)
+        tools.append(tool)
+    out["tools"] = tools
+    return out
 
 
 @app.get("/health")
@@ -75,11 +102,11 @@ def packages() -> dict:
 
 
 @app.get("/packages/{package_id}")
-def package_detail(package_id: str) -> dict:
+def package_detail(package_id: str, request: Request) -> dict:
     pkg = PACKAGES.get(package_id)
     if not pkg:
         return {"package_id": package_id, "name": package_id, "description": "", "version": "", "tools": []}
-    return pkg
+    return _pkg_with_public_endpoints(pkg=pkg, request=request)
 
 
 def _rows(payload: ToolRunPayload) -> List[Dict[str, Any]]:

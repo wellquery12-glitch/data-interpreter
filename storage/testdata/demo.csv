@@ -1,0 +1,4 @@
+driver,amount,trade_date,counterparty
+A,10,2026-01-01,甲公司
+B,30,2026-01-02,乙公司
+A,20,2026-01-03,丙公司

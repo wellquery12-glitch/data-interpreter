@@ -23,13 +23,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 @app.get("/health")
 def health() -> dict:
-    return {
-        "status": "ok",
-        "orchestrator": ORCHESTRATOR_URL,
-        "planner": PLANNER_SERVICE_URL,
-        "executor": EXECUTOR_SERVICE_URL,
-        "tool_backend": TOOL_BACKEND_SERVICE_URL,
-    }
+    return {"status": "ok"}
 
 
 @app.get("/")

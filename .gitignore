@@ -18,8 +18,15 @@ venv/
 *.log
 
 # Local data and generated sessions
-sessions/
-storage/
+# Default: ignore all runtime/user files under storage/sessions.
+# Keep only repository-safe test fixtures.
+storage/*
+!storage/testdata/
+!storage/testdata/**
+
+sessions/*
+!sessions/test_logs/
+!sessions/test_logs/**
 
 # IDE
 .vscode/

@@ -9,18 +9,20 @@
 ## 快速启动
 
 ```bash
-cd /Users/XiaoFei/data-interpreter-agent
+cd <PROJECT_ROOT>
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8010
 ```
 
-打开接口文档：`http://127.0.0.1:8010/docs`
-打开网页端工具：`http://127.0.0.1:8010/`
-打开 LLM 管理页：`http://127.0.0.1:8010/manage`
-打开工具管理页：`http://127.0.0.1:8010/tools`
-打开接口文档中心：`http://127.0.0.1:8010/api-docs`
+默认项目地址记为：`<PROJECT_URL>`
+
+打开接口文档：`<PROJECT_URL>/docs`
+打开网页端工具：`<PROJECT_URL>/`
+打开 LLM 管理页：`<PROJECT_URL>/manage`
+打开工具管理页：`<PROJECT_URL>/tools`
+打开接口文档中心：`<PROJECT_URL>/api-docs`
 
 ## 多服务分层运行（本地）
 
@@ -34,29 +36,35 @@ uvicorn app.main:app --reload --port 8010
 一键启动：
 
 ```bash
-cd /Users/XiaoFei/data-interpreter-agent
+cd <PROJECT_ROOT>
 ./scripts/run_local_services.sh
 ```
 
-前端入口（推荐）：`http://127.0.0.1:18000`
-接口文档中心：`http://127.0.0.1:18000/api-docs`
+前端入口（推荐）：`<PROJECT_URL>`
+接口文档中心：`<PROJECT_URL>/api-docs`
 如果系统里有多个 Python 环境，建议显式指定：
 
 ```bash
-cd /Users/XiaoFei/data-interpreter-agent
-PYTHON_BIN=/Users/XiaoFei/data-interpreter-agent/.venv/bin/python ./scripts/run_local_services.sh
+cd <PROJECT_ROOT>
+PYTHON_BIN=<PROJECT_ROOT>/.venv/bin/python ./scripts/run_local_services.sh
 ```
 
 如需自定义端口，可在启动时覆盖环境变量：
 
 ```bash
-HOST=127.0.0.1 \
+HOST=0.0.0.0 \
 FRONTEND_PORT=19000 \
 ORCHESTRATOR_PORT=19010 \
 PLANNER_PORT=19011 \
 EXECUTOR_PORT=19012 \
 TOOL_BACKEND_PORT=19013 \
 ./scripts/run_local_services.sh
+```
+
+如需让工具包返回“项目地址”而非本机地址，可设置：
+
+```bash
+TOOL_BACKEND_PUBLIC_URL=<PROJECT_URL> ./scripts/run_local_services.sh
 ```
 更多见 [`ARCHITECTURE.md`](./ARCHITECTURE.md)
 
