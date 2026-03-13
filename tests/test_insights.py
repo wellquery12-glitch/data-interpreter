@@ -85,6 +85,53 @@ def test_auto_business_insights_supports_all_topics(tmp_path: Path) -> None:
         assert len(report["insights"]) >= 3
 
 
+def test_auto_business_insights_topic_specific_semantics(tmp_path: Path) -> None:
+    agent = _prepare_agent(
+        tmp_path,
+        dataset_id="biz_topics",
+        content=(
+            "日期,客户,金额,收入,支出,利润,状态,时长,是否流失,客户分层\n"
+            "2026-01-02,甲公司,100,100,60,40,完成,3,否,A\n"
+            "2026-01-03,乙公司,80,80,70,10,处理中,8,是,B\n"
+            "2026-02-01,甲公司,120,120,75,45,完成,4,否,A\n"
+            "2026-02-10,丙公司,60,60,50,10,延迟,10,是,C\n"
+        ),
+    )
+
+    operations = agent.auto_business_insights(
+        dataset_id="biz_topics",
+        topic="operations",
+        requirement="关注履约效率",
+        max_rows=10,
+    )
+    assert operations["topic"] == "operations"
+    assert "运营" in operations["summary"]
+    assert any("履约" in str(x.get("finding", "")) for x in operations["insights"])
+    assert any(str(t.get("name", "")).startswith("operations_") for t in operations["tables"])
+
+    finance = agent.auto_business_insights(
+        dataset_id="biz_topics",
+        topic="finance",
+        requirement="关注收支结构",
+        max_rows=10,
+    )
+    assert finance["topic"] == "finance"
+    assert "财务" in finance["summary"]
+    assert any("财务" in str(x.get("finding", "")) or "利润" in str(x.get("finding", "")) for x in finance["insights"])
+    assert any(str(t.get("name", "")).startswith("finance_") for t in finance["tables"])
+
+    customer = agent.auto_business_insights(
+        dataset_id="biz_topics",
+        topic="customer",
+        requirement="关注客户留存",
+        max_rows=10,
+    )
+    assert customer["topic"] == "customer"
+    assert "客户" in customer["summary"]
+    assert any("客户" in str(x.get("finding", "")) for x in customer["insights"])
+    assert any(str(t.get("name", "")).startswith("customer_") for t in customer["tables"])
+
+
 def test_export_insights_markdown_and_pdf(tmp_path: Path) -> None:
     agent = _prepare_agent(
         tmp_path,

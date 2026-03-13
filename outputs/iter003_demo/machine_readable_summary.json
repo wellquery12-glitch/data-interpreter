@@ -1,0 +1,101 @@
+{
+  "dataset_name": "demo",
+  "profile": {
+    "rows": 3,
+    "cols": 4,
+    "column_types": {
+      "driver": "text",
+      "amount": "numeric",
+      "trade_date": "datetime",
+      "counterparty": "text"
+    },
+    "numeric_cols": [
+      "amount"
+    ],
+    "categorical_cols": [],
+    "datetime_cols": [
+      "trade_date"
+    ],
+    "text_cols": [
+      "driver",
+      "counterparty"
+    ],
+    "id_cols": [],
+    "label_col": "amount",
+    "quality": {
+      "missing_rate": {
+        "driver": 0.0,
+        "amount": 0.0,
+        "trade_date": 0.0,
+        "counterparty": 0.0
+      },
+      "duplicate_rows": 0,
+      "constant_columns": [],
+      "high_cardinality_columns": [],
+      "outlier_ratio": {
+        "amount": 0.0
+      },
+      "dtype_issue_columns": []
+    }
+  },
+  "analysis_plan": [
+    "basic_descriptive_statistics",
+    "missing_value_analysis",
+    "univariate_distribution_analysis",
+    "multivariate_correlation_analysis",
+    "anomaly_detection_analysis",
+    "time_series_trend_analysis",
+    "regression_target_analysis",
+    "text_length_frequency_analysis"
+  ],
+  "facts": [
+    "数据集包含 3 行、4 列。",
+    "识别数值列 1 个、类别列 0 个、时间列 1 个。",
+    "分析计划覆盖 8 类分析。"
+  ],
+  "statistical_inferences": [
+    "缺失值和异常值比例将影响统计结论稳定性。",
+    "若存在高相关数值列，可用于特征筛选但需防止共线性误判。",
+    "类别分布不均衡时，分类相关结论需谨慎外推。"
+  ],
+  "model_conclusions": [
+    "当前流水线采用规则驱动通用分析，不绑定具体数据集字段。",
+    "输出结果可作为后续建模与业务分析的基线。",
+    "图表与统计表联合输出，便于人工复核。"
+  ],
+  "risks_and_limits": [
+    "样本量不足或缺失值过高会降低结论可信度。",
+    "自动字段语义识别存在启发式误差，需人工校验关键字段。",
+    "综合可信度: medium。"
+  ],
+  "validation": {
+    "checks": [
+      {
+        "rule": "sample_size",
+        "status": "warn",
+        "message": "样本量较小(3)，统计推断可信度下降"
+      },
+      {
+        "rule": "missing_data",
+        "status": "pass",
+        "message": "整体缺失率可控(0.00%)"
+      },
+      {
+        "rule": "output_consistency",
+        "status": "pass",
+        "message": "图表与分析数量满足硬性要求"
+      }
+    ],
+    "confidence": "medium"
+  },
+  "charts": [
+    {
+      "name": "histogram.png",
+      "path": "outputs/iter003_demo/charts/histogram.png"
+    },
+    {
+      "name": "bar.png",
+      "path": "outputs/iter003_demo/charts/bar.png"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "run_id": "iter003_demo",
+  "dataset_name": "demo",
+  "dataset_path": "storage/testdata/demo.csv",
+  "analysis_count": 8,
+  "chart_count": 2,
+  "chart_templates_total": 10,
+  "report_templates_total": 20,
+  "plan": [
+    "basic_descriptive_statistics",
+    "missing_value_analysis",
+    "univariate_distribution_analysis",
+    "multivariate_correlation_analysis",
+    "anomaly_detection_analysis",
+    "time_series_trend_analysis",
+    "regression_target_analysis",
+    "text_length_frequency_analysis"
+  ],
+  "validation": {
+    "checks": [
+      {
+        "rule": "sample_size",
+        "status": "warn",
+        "message": "样本量较小(3)，统计推断可信度下降"
+      },
+      {
+        "rule": "missing_data",
+        "status": "pass",
+        "message": "整体缺失率可控(0.00%)"
+      },
+      {
+        "rule": "output_consistency",
+        "status": "pass",
+        "message": "图表与分析数量满足硬性要求"
+      }
+    ],
+    "confidence": "medium"
+  },
+  "reports": {
+    "executive_summary": "outputs/iter003_demo/executive_summary.md",
+    "full_report": "outputs/iter003_demo/full_report.md",
+    "machine_readable_summary": "outputs/iter003_demo/machine_readable_summary.json",
+    "full_report_html": "outputs/iter003_demo/full_report.html"
+  }
+}

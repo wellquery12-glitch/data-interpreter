@@ -63,6 +63,13 @@ h1 { margin: 0 0 8px; }
   background: #ecfeff;
 }
 
+button.btn-link {
+  background: #ffffff;
+  color: #0f766e;
+  border: 1px solid #0f766e;
+  padding: 8px 12px;
+}
+
 .layout {
   display: grid;
   grid-template-columns: minmax(360px, 0.9fr) minmax(520px, 1.1fr);
@@ -387,6 +394,29 @@ th, td {
 .history-item p {
   margin: 8px 0;
   font-size: 14px;
+}
+
+.repo-list {
+  display: grid;
+  gap: 10px;
+}
+
+.repo-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: #f8fbfd;
+}
+
+.repo-item header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.repo-item p {
+  margin: 8px 0;
 }
 
 .reuse-btn {

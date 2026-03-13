@@ -11,6 +11,10 @@ const currencyInput = document.getElementById("currencyInput");
 const saveBtn = document.getElementById("saveBtn");
 const resetBtn = document.getElementById("resetBtn");
 const saveHint = document.getElementById("saveHint");
+const kaggleUsernameInput = document.getElementById("kaggleUsernameInput");
+const kaggleApiKeyInput = document.getElementById("kaggleApiKeyInput");
+const saveKaggleBtn = document.getElementById("saveKaggleBtn");
+const kaggleHint = document.getElementById("kaggleHint");
 const quotaStatus = document.getElementById("quotaStatus");
 const quotaMessage = document.getElementById("quotaMessage");
 const quotaNumbers = document.getElementById("quotaNumbers");
@@ -188,6 +192,18 @@ async function loadConfig() {
   render(data);
 }
 
+async function loadKaggleConfig() {
+  const resp = await fetch("/kaggle/config");
+  const data = await resp.json();
+  if (!resp.ok) {
+    throw new Error("加载 Kaggle 配置失败");
+  }
+  const cfg = data.config || {};
+  kaggleUsernameInput.value = cfg.username || "";
+  kaggleApiKeyInput.value = cfg.api_key || "";
+  kaggleHint.textContent = data.configured ? "Kaggle 凭证已配置" : "尚未配置 Kaggle 凭证";
+}
+
 async function loadServices() {
   let gateway = null;
   let topology = null;
@@ -255,6 +271,23 @@ async function resetUsage() {
   saveHint.textContent = "资源统计已重置";
 }
 
+async function saveKaggleConfig() {
+  const payload = {
+    username: kaggleUsernameInput.value.trim(),
+    api_key: kaggleApiKeyInput.value.trim(),
+  };
+  const resp = await fetch("/kaggle/config", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json();
+  if (!resp.ok) {
+    throw new Error((data && data.detail) || "保存 Kaggle 配置失败");
+  }
+  kaggleHint.textContent = data.configured ? "Kaggle 凭证保存成功" : "已清空 Kaggle 凭证";
+}
+
 saveBtn.addEventListener("click", async () => {
   saveHint.textContent = "保存中...";
   try {
@@ -291,8 +324,22 @@ if (refreshBugsBtn) {
   });
 }
 
+if (saveKaggleBtn) {
+  saveKaggleBtn.addEventListener("click", async () => {
+    kaggleHint.textContent = "保存中...";
+    try {
+      await saveKaggleConfig();
+    } catch (err) {
+      kaggleHint.textContent = err.message || "保存失败";
+    }
+  });
+}
+
 loadConfig().catch((err) => {
   saveHint.textContent = err.message || "初始化失败";
+});
+loadKaggleConfig().catch((err) => {
+  kaggleHint.textContent = err.message || "Kaggle 配置初始化失败";
 });
 loadServices().catch((err) => {
   servicesHint.textContent = err.message || "服务状态初始化失败";

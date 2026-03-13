@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>测试管理</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="insights-body">
+  <main class="page insights-page">
+    <header class="page-head">
+      <div class="head-row">
+        <div>
+          <h1>测试管理</h1>
+          <p class="sub">一键执行自动测试并查看历史结果。</p>
+        </div>
+        <div class="head-actions">
+          <a class="btn-link" href="/manage">LLM 管理</a>
+          <a class="btn-link" href="/">返回工作台</a>
+        </div>
+      </div>
+    </header>
+
+    <section class="panel">
+      <div class="row">
+        <label class="label-inline" for="includePytestInput">包含 pytest</label>
+        <input id="includePytestInput" type="checkbox" checked />
+        <button id="runTestsBtn" type="button">执行自动测试</button>
+        <button id="refreshRunsBtn" type="button">刷新历史</button>
+      </div>
+      <p id="testHint" class="muted">尚未执行测试</p>
+    </section>
+
+    <section class="panel">
+      <h2>测试历史</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>状态</th>
+              <th>耗时(ms)</th>
+              <th>通过</th>
+              <th>失败</th>
+              <th>跳过</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="runsBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>结果详情</h2>
+      <p id="detailHint" class="muted">点击“查看详情”加载</p>
+      <div id="detailWrap"></div>
+    </section>
+  </main>
+
+  <script src="/static/test_manage.js"></script>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>数据仓库</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="insights-body">
+  <main class="page insights-page">
+    <header class="page-head">
+      <div class="head-row">
+        <div>
+          <h1>数据仓库</h1>
+          <p class="sub">公开数据集可扩展接入，私人数据集支持上传、分类和元数据管理。</p>
+        </div>
+        <div class="head-actions">
+          <button id="tabPublicBtn" class="btn-link" type="button">公开数据集</button>
+          <button id="tabPrivateBtn" class="btn-link" type="button">私人数据集</button>
+          <a class="btn-link" href="/">返回工作台</a>
+        </div>
+      </div>
+    </header>
+
+    <p id="repoHint" class="muted">加载中...</p>
+
+    <section id="publicPanel" class="panel">
+      <h2>公开数据集</h2>
+      <div class="row">
+        <select id="publicSourceSelect"></select>
+        <input id="uciKeywordInput" type="text" placeholder="按名称/描述搜索（英文）" />
+        <button id="uciSearchBtn" type="button">搜索</button>
+        <button id="uciRefreshBtn" type="button">刷新</button>
+      </div>
+      <div id="uciListWrap" class="repo-list"></div>
+      <div class="row history-pager">
+        <button id="uciPrevBtn" type="button">上一页</button>
+        <span id="uciPageInfo" class="muted">第 1 / 1 页</span>
+        <button id="uciNextBtn" type="button">下一页</button>
+      </div>
+    </section>
+
+    <section id="privatePanel" class="panel" style="display:none;">
+      <h2>私人数据集（用户上传）</h2>
+      <div class="row">
+        <input id="privateCategoryFilter" type="text" placeholder="按分类筛选，如 销售/运营" />
+        <input id="privateKeywordInput" type="text" placeholder="按名称/描述/标签搜索" />
+        <button id="privateSearchBtn" type="button">搜索</button>
+        <button id="privateRefreshBtn" type="button">刷新</button>
+      </div>
+
+      <h3>上传私人数据集</h3>
+      <div class="row">
+        <input id="privateFileInput" type="file" accept=".csv,.xlsx" />
+        <button id="privateUploadBtn" type="button">上传</button>
+      </div>
+      <p id="privateUploadHint" class="muted"></p>
+
+      <div id="privateListWrap" class="repo-list"></div>
+    </section>
+  </main>
+
+  <div id="previewModal" class="modal hidden">
+    <button id="closePreviewModalBtn" class="modal-close" type="button">关闭</button>
+    <div id="previewModalContent" class="panel" style="max-width:min(1200px,92vw);max-height:82vh;overflow:auto;"></div>
+  </div>
+
+  <script src="/static/repository.js"></script>
+</body>
+</html>

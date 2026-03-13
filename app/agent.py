@@ -7,9 +7,14 @@ import json
 import os
 import re
 import shutil
+import subprocess
+import tempfile
+import time
 import uuid
 import urllib.error
+import urllib.parse
 import urllib.request
+import zipfile
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,16 +41,22 @@ class DatasetInfo:
 
 class DataInterpreterAgent:
     MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+    UCI_LIST_API = "https://archive.ics.uci.edu/api/datasets/list"
+    UCI_DETAIL_API = "https://archive.ics.uci.edu/api/dataset"
+    KAGGLE_LIST_API = "https://www.kaggle.com/api/v1/datasets/list"
 
     def __init__(self, storage_dir: str, sessions_dir: str) -> None:
         self.storage = Path(storage_dir)
         self.sessions = Path(sessions_dir)
+        self.base_dir = self.storage.parent
         self.meta_file = self.storage / ".meta.json"
         self.records_file = self.sessions / "ask_records.jsonl"
         self.tools_file = self.sessions / "tools_memory.json"
         self.bugs_file = self.sessions / "bug_records.jsonl"
+        self.test_runs_file = self.sessions / "test_runs.jsonl"
         self.llm_config_file = self.sessions / "llm_config.json"
         self.llm_usage_file = self.sessions / "llm_usage.json"
+        self.kaggle_config_file = self.sessions / "kaggle_config.json"
         self.tools_hub_file = self.sessions / "tools_hub.json"
         self._df_cache: "OrderedDict[str, Tuple[int, pd.DataFrame]]" = OrderedDict()
         self._df_cache_limit = 8
@@ -81,6 +92,17 @@ class DataInterpreterAgent:
             "original_filename": filename,
             "saved_filename": path.name,
             "alias": "",
+            "source": "upload",
+            "module": "private",
+            "source_id": "",
+            "source_name": "",
+            "source_description": "",
+            "source_repo_url": "",
+            "source_data_url": "",
+            "category": "",
+            "biz_description": "",
+            "analysis_notes": "",
+            "tags": [],
             "updated_at": dt.datetime.utcnow().isoformat(),
         }
         self._save_meta(meta)
@@ -92,9 +114,12 @@ class DataInterpreterAgent:
             columns=[str(c) for c in df.columns],
         )
 
-    def list_datasets(self) -> List[Dict[str, Any]]:
+    def list_datasets(self, module: str = "", category: str = "", keyword: str = "") -> List[Dict[str, Any]]:
         meta = self._load_meta()
         items: List[Dict[str, Any]] = []
+        mod = str(module or "").strip().lower()
+        cat = str(category or "").strip().lower()
+        kw = str(keyword or "").strip().lower()
         for p in sorted(self.storage.glob("*")):
             if not p.is_file():
                 continue
@@ -102,19 +127,299 @@ class DataInterpreterAgent:
                 continue
             stat = p.stat()
             m = meta.get(p.stem, {})
+            source = str(m.get("source", "upload") or "upload")
+            module_value = str(m.get("module", "") or "").strip().lower()
+            module_norm = module_value if module_value in {"public", "private"} else ("public" if source == "uci" else "private")
+            row = {
+                "dataset_id": p.stem,
+                "filename": p.name,
+                "original_filename": m.get("original_filename", p.name),
+                "alias": str(m.get("alias", "")),
+                "source": source,
+                "module": module_norm,
+                "source_id": str(m.get("source_id", "")),
+                "source_name": str(m.get("source_name", "")),
+                "source_description": str(m.get("source_description", "")),
+                "source_repo_url": str(m.get("source_repo_url", "")),
+                "source_data_url": str(m.get("source_data_url", "")),
+                "category": str(m.get("category", "")),
+                "biz_description": str(m.get("biz_description", "")),
+                "analysis_notes": str(m.get("analysis_notes", "")),
+                "tags": m.get("tags", []) if isinstance(m.get("tags", []), list) else [],
+                "ext": p.suffix.lower(),
+                "size_bytes": int(stat.st_size),
+                "updated_at": dt.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            }
+            if mod and str(row.get("module", "")).lower() != mod:
+                continue
+            if cat and str(row.get("category", "")).strip().lower() != cat:
+                continue
+            if kw:
+                text = "\n".join(
+                    [
+                        str(row.get("alias", "")),
+                        str(row.get("original_filename", "")),
+                        str(row.get("filename", "")),
+                        str(row.get("dataset_id", "")),
+                        str(row.get("source_name", "")),
+                        str(row.get("source_description", "")),
+                        str(row.get("category", "")),
+                        str(row.get("biz_description", "")),
+                        str(row.get("analysis_notes", "")),
+                        ",".join([str(t) for t in row.get("tags", [])]),
+                    ]
+                ).lower()
+                if kw not in text:
+                    continue
             items.append(
-                {
-                    "dataset_id": p.stem,
-                    "filename": p.name,
-                    "original_filename": m.get("original_filename", p.name),
-                    "alias": str(m.get("alias", "")),
-                    "ext": p.suffix.lower(),
-                    "size_bytes": int(stat.st_size),
-                    "updated_at": dt.datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                }
+                row
             )
         items.sort(key=lambda x: x["updated_at"], reverse=True)
         return items
+
+    def fetch_uci_datasets(self, keyword: str = "", page: int = 1, page_size: int = 20) -> Dict[str, Any]:
+        safe_page = max(1, int(page or 1))
+        safe_page_size = max(1, min(int(page_size or 20), 100))
+        query = str(keyword or "").strip()
+        url = self.UCI_LIST_API
+        if query:
+            url = f"{url}?search={urllib.parse.quote(query)}"
+
+        payload = self._http_json(url)
+        rows = payload.get("data", []) if isinstance(payload, dict) else []
+        if not isinstance(rows, list):
+            rows = []
+
+        local_uci = self._local_uci_dataset_map()
+        normalized: List[Dict[str, Any]] = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            uci_id_raw = r.get("ID", r.get("id", ""))
+            uci_id = str(uci_id_raw).strip()
+            if not uci_id:
+                continue
+            existed = local_uci.get(uci_id, "")
+            normalized.append(
+                {
+                    "uci_id": uci_id,
+                    "name": str(r.get("Name", r.get("name", ""))),
+                    "description": str(r.get("Abstract", r.get("abstract", ""))),
+                    "task": str(r.get("Task", r.get("task", ""))),
+                    "types": str(r.get("Types", r.get("types", ""))),
+                    "num_instances": r.get("Instances", r.get("num_instances", "")),
+                    "num_features": r.get("Features", r.get("num_features", "")),
+                    "year": r.get("Year", r.get("year", "")),
+                    "downloaded": bool(existed),
+                    "dataset_id": existed,
+                }
+            )
+
+        total = len(normalized)
+        total_pages = (total + safe_page_size - 1) // safe_page_size if total else 0
+        if total_pages > 0:
+            safe_page = min(safe_page, total_pages)
+        start = (safe_page - 1) * safe_page_size
+        end = start + safe_page_size
+        return {
+            "data": normalized[start:end],
+            "total": total,
+            "page": safe_page,
+            "page_size": safe_page_size,
+            "total_pages": total_pages,
+        }
+
+    def fetch_kaggle_datasets(self, topic: str = "businessDataset", keyword: str = "", page: int = 1, page_size: int = 20) -> Dict[str, Any]:
+        safe_page = max(1, int(page or 1))
+        safe_page_size = max(1, min(int(page_size or 20), 100))
+        query = str(keyword or "").strip()
+        topic_norm = str(topic or "businessDataset").strip() or "businessDataset"
+        params = urllib.parse.urlencode(
+            {
+                "page": safe_page,
+                "pageSize": safe_page_size,
+                "search": query,
+                "topic": topic_norm,
+            }
+        )
+        url = f"{self.KAGGLE_LIST_API}?{params}"
+        cfg = self._load_kaggle_config()
+        headers: Dict[str, str] = {"User-Agent": "DataInterpreterAgent/1.0"}
+        auth = self._kaggle_auth_header(cfg)
+        if auth:
+            headers["Authorization"] = auth
+        payload = self._http_json(url, headers=headers)
+        rows = payload if isinstance(payload, list) else payload.get("datasets", []) if isinstance(payload, dict) else []
+        if not isinstance(rows, list):
+            rows = []
+
+        local_kaggle = self._local_source_dataset_map("kaggle")
+        normalized: List[Dict[str, Any]] = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            ref = str(r.get("ref", "")).strip()
+            title = str(r.get("title", "")).strip() or ref
+            if not ref:
+                continue
+            existed = local_kaggle.get(ref, "")
+            normalized.append(
+                {
+                    "kaggle_ref": ref,
+                    "name": title,
+                    "description": str(r.get("subtitle", "")).strip(),
+                    "task": str(r.get("usabilityRating", "")),
+                    "types": "kaggle",
+                    "num_instances": "",
+                    "num_features": "",
+                    "year": str(r.get("lastUpdated", ""))[:4],
+                    "dataset_page_url": f"https://www.kaggle.com/datasets/{ref}",
+                    "downloaded": bool(existed),
+                    "dataset_id": existed,
+                }
+            )
+
+        # Kaggle API may not always return total count; use page-size heuristic.
+        total = len(normalized) if safe_page == 1 and len(normalized) < safe_page_size else (safe_page * safe_page_size + (1 if len(normalized) == safe_page_size else 0))
+        total_pages = safe_page if len(normalized) < safe_page_size else (safe_page + 1)
+        return {
+            "data": normalized,
+            "total": total,
+            "page": safe_page,
+            "page_size": safe_page_size,
+            "total_pages": total_pages,
+            "topic": topic_norm,
+        }
+
+    @staticmethod
+    def list_public_sources() -> List[Dict[str, Any]]:
+        return [
+            {
+                "source_id": "uci",
+                "name": "UCI Machine Learning Repository",
+                "description": "公开机器学习数据集仓库，可按关键字检索并导入。",
+                "enabled": True,
+                "homepage": "https://archive.ics.uci.edu/datasets",
+            },
+            {
+                "source_id": "kaggle",
+                "name": "Kaggle Datasets (businessDataset)",
+                "description": "Kaggle 商业主题公开数据集列表。",
+                "enabled": True,
+                "homepage": "https://www.kaggle.com/datasets?topic=businessDataset",
+                "requires_credentials": True,
+            }
+        ]
+
+    def import_uci_dataset(self, uci_id: int) -> Dict[str, Any]:
+        safe_uci_id = int(uci_id or 0)
+        if safe_uci_id <= 0:
+            raise ValueError("uci_id 必须为正整数")
+
+        existed_dataset_id = self._find_existing_uci_dataset(str(safe_uci_id))
+        if existed_dataset_id:
+            return {"dataset_id": existed_dataset_id, "uci_id": str(safe_uci_id), "downloaded": False, "skipped": True}
+
+        detail_url = f"{self.UCI_DETAIL_API}?id={safe_uci_id}"
+        payload = self._http_json(detail_url)
+        data = payload.get("data", {}) if isinstance(payload, dict) else {}
+        if not isinstance(data, dict) or not data:
+            raise ValueError("UCI 数据集详情获取失败")
+
+        name = str(data.get("name", data.get("Name", f"uci_{safe_uci_id}"))).strip() or f"uci_{safe_uci_id}"
+        description = str(data.get("abstract", data.get("Abstract", ""))).strip()
+        data_url = str(data.get("data_url", data.get("Data URL", ""))).strip()
+        repo_url = str(data.get("repository_url", data.get("Repository URL", ""))).strip()
+        if not data_url:
+            raise ValueError("该数据集没有可直接下载的数据文件")
+
+        filename = self._build_uci_filename(name=name, data_url=data_url, uci_id=safe_uci_id)
+        content = self._http_bytes(data_url)
+        info = self.save_dataset(filename=filename, content=content)
+
+        meta = self._load_meta()
+        row = meta.get(info.dataset_id, {})
+        row["source"] = "uci"
+        row["module"] = "public"
+        row["source_id"] = str(safe_uci_id)
+        row["source_name"] = name
+        row["source_description"] = description
+        row["source_repo_url"] = repo_url
+        row["source_data_url"] = data_url
+        row["category"] = str(row.get("category", "") or "")
+        row["biz_description"] = str(row.get("biz_description", "") or "")
+        row["analysis_notes"] = str(row.get("analysis_notes", "") or "")
+        row["tags"] = row.get("tags", []) if isinstance(row.get("tags", []), list) else []
+        row["updated_at"] = dt.datetime.utcnow().isoformat()
+        meta[info.dataset_id] = row
+        self._save_meta(meta)
+
+        return {
+            "dataset_id": info.dataset_id,
+            "uci_id": str(safe_uci_id),
+            "downloaded": True,
+            "skipped": False,
+            "rows": info.rows,
+            "cols": info.cols,
+            "columns": info.columns,
+            "source_name": name,
+            "source_description": description,
+            "source_repo_url": repo_url,
+            "source_data_url": data_url,
+        }
+
+    def import_kaggle_dataset(self, kaggle_ref: str) -> Dict[str, Any]:
+        ref = str(kaggle_ref or "").strip()
+        if not ref or "/" not in ref:
+            raise ValueError("kaggle_ref 格式应为 owner/dataset-slug")
+        existed_dataset_id = self._find_existing_source_dataset(source="kaggle", source_id=ref)
+        if existed_dataset_id:
+            return {"dataset_id": existed_dataset_id, "kaggle_ref": ref, "downloaded": False, "skipped": True}
+
+        cfg = self._load_kaggle_config()
+        username = str(cfg.get("username", "")).strip()
+        api_key = str(cfg.get("api_key", "")).strip()
+        if not username or not api_key:
+            raise ValueError("请先在管理页配置 Kaggle 用户名和 API Token")
+
+        owner, slug = ref.split("/", 1)
+        api_url = f"https://www.kaggle.com/api/v1/datasets/download/{urllib.parse.quote(owner)}/{urllib.parse.quote(slug)}"
+        headers = {
+            "User-Agent": "DataInterpreterAgent/1.0",
+            "Authorization": self._kaggle_auth_header(cfg),
+        }
+        archive = self._http_bytes(api_url, headers=headers, timeout=120)
+        if not archive:
+            raise ValueError("Kaggle 下载内容为空")
+
+        extracted = self._extract_first_tabular_file(archive=archive, default_slug=slug)
+        if extracted is None:
+            raise ValueError("Kaggle 数据集未找到可导入的 CSV/XLSX 文件")
+        filename, content = extracted
+        info = self.save_dataset(filename=filename, content=content)
+
+        meta = self._load_meta()
+        row = meta.get(info.dataset_id, {})
+        row["source"] = "kaggle"
+        row["module"] = "public"
+        row["source_id"] = ref
+        row["source_name"] = slug
+        row["source_description"] = f"Kaggle dataset: {ref}"
+        row["source_repo_url"] = f"https://www.kaggle.com/datasets/{ref}"
+        row["source_data_url"] = api_url
+        row["updated_at"] = dt.datetime.utcnow().isoformat()
+        meta[info.dataset_id] = row
+        self._save_meta(meta)
+        return {
+            "dataset_id": info.dataset_id,
+            "kaggle_ref": ref,
+            "downloaded": True,
+            "skipped": False,
+            "rows": info.rows,
+            "cols": info.cols,
+            "columns": info.columns,
+            "source_repo_url": row["source_repo_url"],
+        }
 
     def set_dataset_alias(self, dataset_id: str, alias: str) -> Dict[str, Any]:
         real_id = self._resolve_dataset_id(dataset_id)
@@ -136,6 +441,54 @@ class DataInterpreterAgent:
         meta[real_id] = row
         self._save_meta(meta)
         return {"dataset_id": real_id, "alias": alias_norm}
+
+    def update_dataset_metadata(self, dataset_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        real_id = self._resolve_dataset_id(dataset_id)
+        if not real_id:
+            raise FileNotFoundError("dataset_id 不存在")
+        if self._find_dataset(real_id) is None:
+            raise FileNotFoundError("dataset 文件不存在")
+        raw = payload if isinstance(payload, dict) else {}
+
+        alias = str(raw.get("alias", "")).strip()
+        category = str(raw.get("category", "")).strip()
+        biz_description = str(raw.get("biz_description", "")).strip()
+        analysis_notes = str(raw.get("analysis_notes", "")).strip()
+        tags_raw = raw.get("tags", [])
+        tags: List[str] = []
+        if isinstance(tags_raw, list):
+            tags = [str(v).strip() for v in tags_raw if str(v).strip()]
+        elif isinstance(tags_raw, str):
+            tags = [s.strip() for s in tags_raw.split(",") if s.strip()]
+        tags = tags[:20]
+
+        if alias and not re.match(r"^[A-Za-z0-9_\-\u4e00-\u9fff]{1,64}$", alias):
+            raise ValueError("别名仅支持中英文、数字、下划线、中划线，长度 1-64")
+
+        meta = self._load_meta()
+        for did, info in meta.items():
+            if did == real_id:
+                continue
+            if alias and str(info.get("alias", "")).strip() == alias:
+                raise ValueError("别名已被其他数据集占用")
+
+        row = meta.get(real_id, {})
+        row["alias"] = alias
+        row["category"] = category
+        row["biz_description"] = biz_description
+        row["analysis_notes"] = analysis_notes
+        row["tags"] = tags
+        row["updated_at"] = dt.datetime.utcnow().isoformat()
+        meta[real_id] = row
+        self._save_meta(meta)
+        return {
+            "dataset_id": real_id,
+            "alias": alias,
+            "category": category,
+            "biz_description": biz_description,
+            "analysis_notes": analysis_notes,
+            "tags": tags,
+        }
 
     def delete_dataset(self, dataset_id: str) -> Dict[str, Any]:
         real_id = self._resolve_dataset_id(dataset_id)
@@ -311,6 +664,52 @@ class DataInterpreterAgent:
             "dtypes": {str(c): str(t) for c, t in df.dtypes.items()},
             "sample_rows": sample,
         }
+
+    def get_dataset_summary(self, dataset_id: str) -> Dict[str, Any]:
+        real_id = self._resolve_dataset_id(dataset_id) or dataset_id
+        path = self._find_dataset(dataset_id)
+        if path is None:
+            raise FileNotFoundError("dataset_id 不存在")
+        df = self._load_df_cached(path)
+        meta = self._load_meta().get(real_id, {})
+        columns = [str(c) for c in df.columns]
+        dtypes = {str(c): str(t) for c, t in df.dtypes.items()}
+        numeric_cols = [c for c, t in dtypes.items() if any(k in t.lower() for k in ["int", "float", "double"])]
+        date_cols = [c for c in columns if re.search(r"(date|time|日期|时间)", c, re.IGNORECASE)]
+        category_cols = [c for c in columns if c not in numeric_cols][:8]
+
+        analyses: List[str] = []
+        if numeric_cols:
+            analyses.append("数值统计分析（均值/中位数/最大最小/分布）")
+        if category_cols and numeric_cols:
+            analyses.append("分类对比分析（按维度聚合求和/均值/TopN）")
+        if date_cols and numeric_cols:
+            analyses.append("时间趋势分析（按日/周/月变化趋势）")
+        if len(numeric_cols) >= 2:
+            analyses.append("相关性分析（字段相关关系）")
+        analyses.append("数据质量检查（缺失值、异常值、重复记录）")
+        analyses = analyses[:6]
+
+        summary = {
+            "dataset_id": real_id,
+            "source": str(meta.get("source", "upload") or "upload"),
+            "module": str(meta.get("module", "") or "").strip().lower()
+            or ("public" if str(meta.get("source", "")).strip().lower() in {"uci", "kaggle"} else "private"),
+            "source_name": str(meta.get("source_name", "")),
+            "alias": str(meta.get("alias", "")),
+            "category": str(meta.get("category", "")),
+            "biz_description": str(meta.get("biz_description", "")),
+            "analysis_notes": str(meta.get("analysis_notes", "")),
+            "tags": meta.get("tags", []) if isinstance(meta.get("tags", []), list) else [],
+            "rows": int(df.shape[0]),
+            "cols": int(df.shape[1]),
+            "columns": columns,
+            "dtypes": dtypes,
+            "numeric_columns": numeric_cols,
+            "date_columns": date_cols,
+            "recommended_analyses": analyses,
+        }
+        return summary
 
     def auto_sales_insights(
         self,
@@ -697,29 +1096,534 @@ class DataInterpreterAgent:
         requirement: str,
         max_rows: int,
     ) -> Dict[str, Any]:
-        base = self.auto_sales_insights(
-            dataset_id=dataset_id,
-            max_rows=max_rows,
-            requirement=requirement,
-            topic=topic,
+        path = self._find_dataset(dataset_id)
+        if path is None:
+            raise FileNotFoundError("dataset_id 不存在")
+        df = self._load_df_cached(path)
+        safe_rows = max(3, min(int(max_rows or 10), 50))
+        requirement_text = str(requirement or "").strip()
+        columns = [str(c) for c in df.columns]
+        session_id = uuid.uuid4().hex
+        session_dir = self.sessions / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        amount_col = (
+            self._best_match_column("销售金额", columns)
+            or self._best_match_column("金额", columns)
+            or self._best_match_column("成交金额", columns)
+            or self._best_match_column("revenue", columns)
+            or self._best_match_column("sales", columns)
+            or self._best_match_column("gmv", columns)
+            or self._best_match_column("amount", columns)
         )
-        topic_map = {
-            "operations": ("运营", "履约效率、时效和成本"),
-            "finance": ("财务", "收支结构、异常波动和风险控制"),
-            "customer": ("客户", "客户分层、贡献和留存"),
+        customer_col = (
+            self._best_match_column("客户", columns)
+            or self._best_match_column("客户名称", columns)
+            or self._best_match_column("交易对方", columns)
+            or self._best_match_column("交易对象", columns)
+            or self._best_match_column("customer", columns)
+            or self._best_match_column("counterparty", columns)
+        )
+        date_col = (
+            self._best_match_column("交易时间", columns)
+            or self._best_match_column("订单日期", columns)
+            or self._best_match_column("日期", columns)
+            or self._best_match_column("date", columns)
+            or self._best_match_column("created_at", columns)
+        )
+        status_col = (
+            self._best_match_column("状态", columns)
+            or self._best_match_column("订单状态", columns)
+            or self._best_match_column("履约状态", columns)
+            or self._best_match_column("status", columns)
+            or self._best_match_column("state", columns)
+        )
+        duration_col = (
+            self._best_match_column("时长", columns)
+            or self._best_match_column("耗时", columns)
+            or self._best_match_column("处理时长", columns)
+            or self._best_match_column("duration", columns)
+            or self._best_match_column("lead_time", columns)
+        )
+        cost_col = (
+            self._best_match_column("成本", columns)
+            or self._best_match_column("费用", columns)
+            or self._best_match_column("cost", columns)
+            or self._best_match_column("expense", columns)
+        )
+        income_col = (
+            self._best_match_column("收入", columns)
+            or self._best_match_column("营收", columns)
+            or self._best_match_column("revenue", columns)
+            or self._best_match_column("income", columns)
+        )
+        expense_col = (
+            self._best_match_column("支出", columns)
+            or self._best_match_column("支出金额", columns)
+            or self._best_match_column("expense", columns)
+            or cost_col
+        )
+        profit_col = (
+            self._best_match_column("利润", columns)
+            or self._best_match_column("净利润", columns)
+            or self._best_match_column("profit", columns)
+        )
+        churn_col = (
+            self._best_match_column("流失", columns)
+            or self._best_match_column("是否流失", columns)
+            or self._best_match_column("churn", columns)
+        )
+        segment_col = (
+            self._best_match_column("客户等级", columns)
+            or self._best_match_column("客户分层", columns)
+            or self._best_match_column("segment", columns)
+        )
+
+        available = {
+            "amount_col": amount_col,
+            "customer_col": customer_col,
+            "date_col": date_col,
+            "status_col": status_col,
+            "duration_col": duration_col,
+            "cost_col": cost_col,
+            "income_col": income_col,
+            "expense_col": expense_col,
+            "profit_col": profit_col,
+            "churn_col": churn_col,
+            "segment_col": segment_col,
+            "columns": columns,
         }
-        cname, focus = topic_map.get(topic, ("业务", "关键指标"))
-        insights = base.get("insights", [])
-        if isinstance(insights, list):
-            for item in insights:
-                if isinstance(item, dict) and str(item.get("suggestion", "")).strip():
-                    item["suggestion"] = f"[{cname}] {item['suggestion']}"
-        req = str(requirement or "").strip()
-        req_text = f"；已结合需求“{req}”。" if req else "。"
-        base["summary"] = f"已按{cname}主题自动分析，重点关注{focus}{req_text}"
-        base["topic"] = topic
-        base["analysis_scope"] = topic
-        return base
+
+        insights: List[Dict[str, Any]] = []
+        tables: List[Dict[str, Any]] = []
+        plots: List[str] = []
+        confidence = "medium"
+
+        if topic == "operations":
+            order_cnt = int(df.shape[0])
+            insights.append(
+                {
+                    "finding": "运营吞吐规模已可量化",
+                    "evidence": f"当前记录数={order_cnt}，可作为履约与工单处理的基础吞吐指标。",
+                    "suggestion": "按周建立吞吐监控看板，持续跟踪峰值与低谷并安排资源弹性。",
+                    "priority": "medium",
+                    "impact_estimation": "定性：可提前识别资源不足导致的履约风险。",
+                }
+            )
+
+            if status_col:
+                status_series = df[status_col].astype(str).fillna("").str.strip()
+                done_mask = status_series.str.contains(
+                    r"完成|完结|已交付|已签收|closed|done|success|completed",
+                    case=False,
+                    regex=True,
+                )
+                completion_rate = float(done_mask.mean()) if len(status_series) else 0.0
+                status_dist = status_series.value_counts(dropna=False).head(safe_rows)
+                rows = [{"status": str(k), "count": int(v)} for k, v in status_dist.items()]
+                tables.append({"name": "operations_status_distribution", "rows": rows})
+                insights.append(
+                    {
+                        "finding": "履约状态分布可用于定位堵点",
+                        "evidence": f"完成率约 {completion_rate * 100:.2f}%，状态字段={status_col}。",
+                        "suggestion": "对未完成或异常状态设置 SLA 预警，并建立按状态的责任人闭环。",
+                        "priority": "high" if completion_rate < 0.8 else "medium",
+                        "impact_estimation": "量化：完成率每提升 5%，通常可减少延期工单与返工成本。",
+                    }
+                )
+                status_plot = self._save_insights_plot(
+                    session_dir=session_dir,
+                    filename="operations_status.png",
+                    title="Operations Status Distribution",
+                    x_labels=[str(k) for k in status_dist.index.tolist()],
+                    y_values=[float(v) for v in status_dist.values.tolist()],
+                    chart_type="bar",
+                )
+                if status_plot:
+                    plots.append(f"/sessions/{session_id}/{status_plot}")
+
+            if date_col:
+                dt_series = pd.to_datetime(df[date_col], errors="coerce")
+                valid = dt_series.notna()
+                if bool(valid.any()):
+                    monthly_orders = (
+                        pd.DataFrame({"period": dt_series[valid].dt.to_period("M").astype(str)})
+                        .groupby("period")
+                        .size()
+                        .sort_index()
+                    )
+                    rows = [{"period": str(k), "order_count": int(v)} for k, v in monthly_orders.tail(safe_rows).items()]
+                    tables.append({"name": "operations_monthly_orders", "rows": rows})
+                    if len(monthly_orders) >= 2 and monthly_orders.iloc[-2] > 0:
+                        growth = float((monthly_orders.iloc[-1] - monthly_orders.iloc[-2]) / monthly_orders.iloc[-2])
+                    else:
+                        growth = 0.0
+                    insights.append(
+                        {
+                            "finding": "运营吞吐趋势可追踪到月度节奏",
+                            "evidence": f"最新周期={monthly_orders.index[-1]}，环比变化约 {growth * 100:.2f}%。",
+                            "suggestion": "对高峰月提前准备产能，对低谷月集中做流程优化与标准化。",
+                            "priority": "medium",
+                            "impact_estimation": "定性：平滑吞吐波动可降低排队时长与服务超时概率。",
+                        }
+                    )
+                    trend_plot = self._save_insights_plot(
+                        session_dir=session_dir,
+                        filename="operations_monthly_orders.png",
+                        title="Operations Monthly Throughput",
+                        x_labels=[str(x) for x in monthly_orders.index.tolist()],
+                        y_values=[float(v) for v in monthly_orders.values.tolist()],
+                        chart_type="line",
+                    )
+                    if trend_plot:
+                        plots.append(f"/sessions/{session_id}/{trend_plot}")
+
+            if duration_col:
+                duration = pd.to_numeric(df[duration_col], errors="coerce")
+                duration = duration[duration > 0]
+                if not duration.empty:
+                    avg_duration = float(duration.mean())
+                    p90_duration = float(duration.quantile(0.9))
+                    insights.append(
+                        {
+                            "finding": "处理时效具备优化空间",
+                            "evidence": f"平均处理时长约 {avg_duration:.2f}，P90 约 {p90_duration:.2f}（字段={duration_col}）。",
+                            "suggestion": "优先压缩长尾工单时长，拆解 P90 以上任务的等待与审批环节。",
+                            "priority": "high" if p90_duration > avg_duration * 1.5 else "medium",
+                            "impact_estimation": "量化：若 P90 时长下降 10%，整体超时风险可显著下降。",
+                        }
+                    )
+            elif cost_col:
+                cost = pd.to_numeric(df[cost_col], errors="coerce").fillna(0.0)
+                avg_cost = float(cost.mean()) if len(cost) else 0.0
+                insights.append(
+                    {
+                        "finding": "运营成本可作为效率代理指标",
+                        "evidence": f"平均单笔成本约 {avg_cost:.2f}（字段={cost_col}）。",
+                        "suggestion": "按业务类型拆分成本并识别高成本环节，建立成本责任归因。",
+                        "priority": "medium",
+                        "impact_estimation": "量化：单笔成本每降低 5%，总运营费用可同比例下降。",
+                    }
+                )
+
+            while len(insights) < 3:
+                insights.append(
+                    {
+                        "finding": "关键运营字段仍有补齐空间",
+                        "evidence": "当前可识别字段不足以覆盖完整时效与质量分析。",
+                        "suggestion": "补充状态、时长和关键事件时间戳字段，提升运营建议精度。",
+                        "priority": "medium",
+                        "impact_estimation": "定性：字段完善后可输出更稳定的履约优化建议。",
+                    }
+                )
+            req = f" 已结合你的需求“{requirement_text}”生成建议。" if requirement_text else ""
+            summary = f"已完成运营主题自动分析：共 {int(df.shape[0])} 条记录，输出 {len(insights)} 条建议。{req}".strip()
+            confidence = "high" if status_col and date_col else "medium"
+
+        elif topic == "finance":
+            revenue_series = None
+            expense_series = None
+            profit_series = None
+            if income_col:
+                revenue_series = pd.to_numeric(df[income_col], errors="coerce").fillna(0.0)
+            elif amount_col:
+                revenue_series = pd.to_numeric(df[amount_col], errors="coerce").fillna(0.0)
+            if expense_col:
+                expense_series = pd.to_numeric(df[expense_col], errors="coerce").fillna(0.0)
+            if profit_col:
+                profit_series = pd.to_numeric(df[profit_col], errors="coerce").fillna(0.0)
+            elif revenue_series is not None and expense_series is not None:
+                profit_series = revenue_series - expense_series
+
+            total_revenue = float(revenue_series.sum()) if revenue_series is not None else 0.0
+            total_expense = float(expense_series.sum()) if expense_series is not None else 0.0
+            total_profit = float(profit_series.sum()) if profit_series is not None else 0.0
+
+            if revenue_series is not None:
+                insights.append(
+                    {
+                        "finding": "财务规模可形成收入基线",
+                        "evidence": f"累计收入约 {total_revenue:.2f}（字段={income_col or amount_col}）。",
+                        "suggestion": "将收入拆分到业务线或区域，定位增长主驱动与薄弱环节。",
+                        "priority": "high",
+                        "impact_estimation": "定性：收入结构更清晰后，资源投放更可控。",
+                    }
+                )
+            else:
+                insights.append(
+                    {
+                        "finding": "缺少可识别收入字段，无法完成完整收支分析",
+                        "evidence": f"当前字段: {', '.join(columns[:12])}" if columns else "字段为空",
+                        "suggestion": "请补充收入/营收字段，以输出更可靠的财务健康建议。",
+                        "priority": "high",
+                        "impact_estimation": "定性：补齐字段后可评估增长与风险暴露程度。",
+                    }
+                )
+
+            if expense_series is not None:
+                expense_ratio = float(total_expense / total_revenue) if total_revenue > 0 else 0.0
+                insights.append(
+                    {
+                        "finding": "支出强度可用于衡量成本压力",
+                        "evidence": (
+                            f"累计支出约 {total_expense:.2f}，收支比约 {expense_ratio * 100:.2f}%（字段={expense_col}）。"
+                            if total_revenue > 0
+                            else f"累计支出约 {total_expense:.2f}（字段={expense_col}）。"
+                        ),
+                        "suggestion": "按成本项建立预算偏差追踪，对高偏差项设置审批与复盘机制。",
+                        "priority": "high" if expense_ratio > 0.85 and total_revenue > 0 else "medium",
+                        "impact_estimation": "量化：重点成本项压降 5%-10% 可直接改善利润空间。",
+                    }
+                )
+
+            if profit_series is not None:
+                profit_margin = float(total_profit / total_revenue) if total_revenue > 0 else 0.0
+                insights.append(
+                    {
+                        "finding": "利润表现可用于识别财务健康度",
+                        "evidence": (
+                            f"累计利润约 {total_profit:.2f}，利润率约 {profit_margin * 100:.2f}%。"
+                            if total_revenue > 0
+                            else f"累计利润约 {total_profit:.2f}。"
+                        ),
+                        "suggestion": "优先治理低毛利业务与异常费用，建立利润率目标红线。",
+                        "priority": "high" if total_profit < 0 else "medium",
+                        "impact_estimation": "量化：利润率每提升 1pct，资金安全垫同步提升。",
+                    }
+                )
+
+            if date_col and (revenue_series is not None or profit_series is not None):
+                metric_name = "profit" if profit_series is not None else "revenue"
+                metric = profit_series if profit_series is not None else revenue_series
+                dt_series = pd.to_datetime(df[date_col], errors="coerce")
+                valid = dt_series.notna()
+                if metric is not None and bool(valid.any()):
+                    monthly_metric = (
+                        pd.DataFrame(
+                            {
+                                "period": dt_series[valid].dt.to_period("M").astype(str),
+                                "metric": metric[valid],
+                            }
+                        )
+                        .groupby("period")["metric"]
+                        .sum()
+                        .sort_index()
+                    )
+                    rows = [{"period": str(k), metric_name: float(v)} for k, v in monthly_metric.tail(safe_rows).items()]
+                    tables.append({"name": f"finance_monthly_{metric_name}", "rows": rows})
+                    if len(monthly_metric) >= 2 and monthly_metric.iloc[-2] != 0:
+                        growth = float((monthly_metric.iloc[-1] - monthly_metric.iloc[-2]) / monthly_metric.iloc[-2])
+                    else:
+                        growth = 0.0
+                    insights.append(
+                        {
+                            "finding": "财务趋势可追踪到月度波动",
+                            "evidence": f"{metric_name} 最近周期={monthly_metric.index[-1]}，环比约 {growth * 100:.2f}%。",
+                            "suggestion": "对异常波动月份复盘业务事件与费用结构，形成财务解释口径。",
+                            "priority": "high" if growth < -0.1 else "medium",
+                            "impact_estimation": "定性：提前识别下滑月份可降低资金与经营风险。",
+                        }
+                    )
+                    trend_plot = self._save_insights_plot(
+                        session_dir=session_dir,
+                        filename=f"finance_monthly_{metric_name}.png",
+                        title=f"Finance Monthly {metric_name.title()}",
+                        x_labels=[str(x) for x in monthly_metric.index.tolist()],
+                        y_values=[float(v) for v in monthly_metric.values.tolist()],
+                        chart_type="line",
+                    )
+                    if trend_plot:
+                        plots.append(f"/sessions/{session_id}/{trend_plot}")
+
+            if customer_col and revenue_series is not None:
+                cust_rev = (
+                    pd.DataFrame({"customer": df[customer_col].astype(str), "revenue": revenue_series})
+                    .groupby("customer")["revenue"]
+                    .sum()
+                    .sort_values(ascending=False)
+                )
+                if not cust_rev.empty:
+                    top_ratio = float(cust_rev.iloc[0] / total_revenue) if total_revenue > 0 else 0.0
+                    rows = [{"customer": str(k), "revenue": float(v)} for k, v in cust_rev.head(safe_rows).items()]
+                    tables.append({"name": "finance_revenue_by_customer", "rows": rows})
+                    insights.append(
+                        {
+                            "finding": "收入集中度反映财务稳定性风险",
+                            "evidence": f"Top1 收入占比约 {top_ratio * 100:.2f}%，客户数={int(cust_rev.shape[0])}。",
+                            "suggestion": "对高集中客户设置信用与回款监控，同时扩展收入来源。",
+                            "priority": "high" if top_ratio >= 0.35 else "medium",
+                            "impact_estimation": "定性：降低集中度可提升现金流稳定性与抗风险能力。",
+                        }
+                    )
+
+            while len(insights) < 3:
+                insights.append(
+                    {
+                        "finding": "财务字段完整性仍可提升",
+                        "evidence": "当前字段不足以覆盖预算、利润、现金流全链路。",
+                        "suggestion": "补充利润、费用分类和回款字段，增强财务建议可执行性。",
+                        "priority": "medium",
+                        "impact_estimation": "定性：完整字段有助于构建更可靠的财务预警。",
+                    }
+                )
+            req = f" 已结合你的需求“{requirement_text}”生成建议。" if requirement_text else ""
+            summary = (
+                f"已完成财务主题自动分析：收入 {total_revenue:.2f}，支出 {total_expense:.2f}，利润 {total_profit:.2f}，"
+                f"输出 {len(insights)} 条建议。{req}"
+            ).strip()
+            confidence = "high" if (revenue_series is not None and date_col) else "medium"
+
+        else:
+            customer_cnt = 0
+            if customer_col:
+                customer_series = df[customer_col].astype(str).fillna("").str.strip()
+                customer_series = customer_series[customer_series != ""]
+                customer_cnt = int(customer_series.nunique())
+                insights.append(
+                    {
+                        "finding": "客户覆盖规模已可量化",
+                        "evidence": f"识别客户字段 `{customer_col}`，去重客户数约 {customer_cnt}。",
+                        "suggestion": "按客户规模和价值建立分层运营策略，明确维护频次与服务等级。",
+                        "priority": "high",
+                        "impact_estimation": "定性：客户分层可提升运营资源利用效率。",
+                    }
+                )
+                if amount_col:
+                    amount = pd.to_numeric(df[amount_col], errors="coerce").fillna(0.0)
+                    customer_sales = (
+                        pd.DataFrame({"customer": df[customer_col].astype(str), "amount": amount})
+                        .groupby("customer")["amount"]
+                        .sum()
+                        .sort_values(ascending=False)
+                    )
+                    if not customer_sales.empty:
+                        total_sales = float(customer_sales.sum())
+                        top1_ratio = float(customer_sales.iloc[0] / total_sales) if total_sales > 0 else 0.0
+                        rows = [{"customer": str(k), "amount": float(v)} for k, v in customer_sales.head(safe_rows).items()]
+                        tables.append({"name": "customer_value_top", "rows": rows})
+                        insights.append(
+                            {
+                                "finding": "客户价值集中度可识别",
+                                "evidence": f"Top1 客户贡献占比约 {top1_ratio * 100:.2f}%，总客户数={customer_cnt}。",
+                                "suggestion": "降低对单一客户依赖，扩展高潜客户转化并设置预警阈值。",
+                                "priority": "high" if top1_ratio >= 0.35 else "medium",
+                                "impact_estimation": "量化：若腰部客户贡献提升 10%，整体收入结构更稳健。",
+                            }
+                        )
+                        top_plot = self._save_insights_plot(
+                            session_dir=session_dir,
+                            filename="customer_value_top.png",
+                            title="Customer Value Distribution",
+                            x_labels=[str(k) for k in customer_sales.head(8).index.tolist()],
+                            y_values=[float(v) for v in customer_sales.head(8).values.tolist()],
+                            chart_type="bar",
+                        )
+                        if top_plot:
+                            plots.append(f"/sessions/{session_id}/{top_plot}")
+            else:
+                insights.append(
+                    {
+                        "finding": "缺少客户字段，无法进行客户分层与留存分析",
+                        "evidence": f"当前字段: {', '.join(columns[:12])}" if columns else "字段为空",
+                        "suggestion": "请补充客户标识字段后再执行客户主题分析。",
+                        "priority": "high",
+                        "impact_estimation": "定性：补齐客户维度后可输出更精准的客户经营建议。",
+                    }
+                )
+
+            if date_col and customer_col:
+                dt_series = pd.to_datetime(df[date_col], errors="coerce")
+                valid = dt_series.notna()
+                if bool(valid.any()):
+                    tmp = pd.DataFrame(
+                        {
+                            "period": dt_series[valid].dt.to_period("M").astype(str),
+                            "customer": df.loc[valid, customer_col].astype(str),
+                        }
+                    )
+                    actives = tmp.groupby("period")["customer"].nunique().sort_index()
+                    if not actives.empty:
+                        rows = [{"period": str(k), "active_customers": int(v)} for k, v in actives.tail(safe_rows).items()]
+                        tables.append({"name": "customer_active_trend", "rows": rows})
+                        if len(actives) >= 2 and actives.iloc[-2] > 0:
+                            active_growth = float((actives.iloc[-1] - actives.iloc[-2]) / actives.iloc[-2])
+                        else:
+                            active_growth = 0.0
+                        insights.append(
+                            {
+                                "finding": "活跃客户趋势可反映客户健康度",
+                                "evidence": f"最新周期活跃客户={int(actives.iloc[-1])}，环比约 {active_growth * 100:.2f}%。",
+                                "suggestion": "对活跃客户下降周期执行召回活动，并结合渠道评估流量质量。",
+                                "priority": "high" if active_growth < -0.1 else "medium",
+                                "impact_estimation": "定性：稳定活跃客户规模可提高收入可预测性。",
+                            }
+                        )
+                        trend_plot = self._save_insights_plot(
+                            session_dir=session_dir,
+                            filename="customer_active_trend.png",
+                            title="Customer Active Trend",
+                            x_labels=[str(x) for x in actives.index.tolist()],
+                            y_values=[float(v) for v in actives.values.tolist()],
+                            chart_type="line",
+                        )
+                        if trend_plot:
+                            plots.append(f"/sessions/{session_id}/{trend_plot}")
+
+            if churn_col:
+                churn_series = df[churn_col].astype(str).str.lower()
+                churn_yes = churn_series.str.contains(r"1|是|true|yes|流失", regex=True)
+                churn_rate = float(churn_yes.mean()) if len(churn_series) else 0.0
+                insights.append(
+                    {
+                        "finding": "客户流失风险可被量化跟踪",
+                        "evidence": f"流失率约 {churn_rate * 100:.2f}%（字段={churn_col}）。",
+                        "suggestion": "建立高风险客户预警名单并配置挽回动作包，缩短干预时滞。",
+                        "priority": "high" if churn_rate >= 0.2 else "medium",
+                        "impact_estimation": "量化：流失率每下降 1pct，客户生命周期价值通常可同步提升。",
+                    }
+                )
+
+            if segment_col:
+                seg = df[segment_col].astype(str).value_counts(dropna=False).head(safe_rows)
+                rows = [{"segment": str(k), "count": int(v)} for k, v in seg.items()]
+                tables.append({"name": "customer_segment_distribution", "rows": rows})
+                insights.append(
+                    {
+                        "finding": "客户分层分布可指导差异化运营",
+                        "evidence": f"已识别客户分层字段 `{segment_col}`，层级数约 {int(seg.shape[0])}。",
+                        "suggestion": "对高价值层级提高服务深度，对低活跃层级设计激活任务。",
+                        "priority": "medium",
+                        "impact_estimation": "定性：分层运营可提升营销投入产出比。",
+                    }
+                )
+
+            while len(insights) < 3:
+                insights.append(
+                    {
+                        "finding": "客户主题分析字段仍需补齐",
+                        "evidence": "当前字段不足以完整覆盖价值、留存和流失分析。",
+                        "suggestion": "补充客户标识、交易时间与价值字段，提升建议可执行性。",
+                        "priority": "medium",
+                        "impact_estimation": "定性：字段越完整，客户建议越接近可落地动作。",
+                    }
+                )
+            req = f" 已结合你的需求“{requirement_text}”生成建议。" if requirement_text else ""
+            summary = f"已完成客户主题自动分析：识别客户数约 {customer_cnt}，输出 {len(insights)} 条建议。{req}".strip()
+            confidence = "high" if customer_col and (amount_col or date_col) else "medium"
+
+        return {
+            "session_id": session_id,
+            "dataset_id": dataset_id,
+            "topic": topic,
+            "requirement": requirement_text,
+            "summary": summary,
+            "insights": insights[: max(3, safe_rows)],
+            "tables": tables,
+            "plots": plots,
+            "confidence": confidence,
+            "analysis_scope": topic,
+            "available_fields": available,
+        }
 
     @staticmethod
     def _save_insights_plot(
@@ -798,6 +1702,22 @@ class DataInterpreterAgent:
         quota = self._quota_status(cfg=cfg, usage=usage)
         return {"config": cfg, "usage": usage, "quota": quota}
 
+    def get_kaggle_settings(self) -> Dict[str, Any]:
+        cfg = self._load_kaggle_config()
+        return {
+            "config": cfg,
+            "configured": bool(str(cfg.get("username", "")).strip() and str(cfg.get("api_key", "")).strip()),
+        }
+
+    def update_kaggle_settings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        cfg = self._sanitize_kaggle_config(payload=payload, base=self._load_kaggle_config())
+        cfg["updated_at"] = dt.datetime.utcnow().isoformat()
+        self._save_kaggle_config(cfg)
+        return {
+            "config": cfg,
+            "configured": bool(str(cfg.get("username", "")).strip() and str(cfg.get("api_key", "")).strip()),
+        }
+
     def reset_llm_usage(self) -> Dict[str, Any]:
         usage = self._default_llm_usage()
         usage["updated_at"] = dt.datetime.utcnow().isoformat()
@@ -809,6 +1729,112 @@ class DataInterpreterAgent:
     def get_tools_hub(self) -> Dict[str, Any]:
         hub = self._load_tools_hub()
         return self._format_tools_hub(hub)
+
+    def run_automated_tests(self, include_pytest: bool = True) -> Dict[str, Any]:
+        run_id = uuid.uuid4().hex
+        start = time.time()
+        commands: List[Dict[str, Any]] = [
+            {
+                "name": "python_compile",
+                "cmd": [
+                    "python3",
+                    "-m",
+                    "py_compile",
+                    "app/main.py",
+                    "app/agent.py",
+                    "pipelines/uci_auto_pipeline.py",
+                    "tests/test_iter003_pipeline.py",
+                    "tests/test_kaggle_repository.py",
+                ],
+                "optional": False,
+            },
+            {
+                "name": "node_check",
+                "cmd": ["node", "--check", "app/static/app.js"],
+                "optional": True,
+            },
+            {
+                "name": "iter003_demo",
+                "cmd": ["./scripts/run_iter003_demo.sh"],
+                "optional": False,
+            },
+        ]
+        if include_pytest:
+            commands.append(
+                {
+                    "name": "pytest_core",
+                    "cmd": [
+                        "python3",
+                        "-m",
+                        "pytest",
+                        "-q",
+                        "tests/test_iter003_pipeline.py",
+                        "tests/test_uci_repository.py",
+                        "tests/test_kaggle_repository.py",
+                        "tests/test_dataset_metadata_summary.py",
+                    ],
+                    "optional": True,
+                }
+            )
+
+        items: List[Dict[str, Any]] = []
+        pass_count = 0
+        fail_count = 0
+        skip_count = 0
+        for c in commands:
+            item = self._execute_test_command(cmd=c["cmd"], timeout=360)
+            item["name"] = str(c["name"])
+            item["optional"] = bool(c.get("optional", False))
+            status = str(item.get("status", "fail"))
+            if status == "pass":
+                pass_count += 1
+            elif status == "skipped":
+                skip_count += 1
+            else:
+                fail_count += 1
+            items.append(item)
+
+        hard_fail = any(i.get("status") == "fail" and not i.get("optional", False) for i in items)
+        status = "fail" if hard_fail else "pass"
+        duration_ms = int((time.time() - start) * 1000)
+        payload = {
+            "run_id": run_id,
+            "time": dt.datetime.utcnow().isoformat(),
+            "status": status,
+            "duration_ms": duration_ms,
+            "include_pytest": bool(include_pytest),
+            "pass_count": pass_count,
+            "fail_count": fail_count,
+            "skip_count": skip_count,
+            "items": items,
+        }
+        self._append_jsonl(self.test_runs_file, payload)
+        detail_dir = self.sessions / "test_runs" / run_id
+        detail_dir.mkdir(parents=True, exist_ok=True)
+        (detail_dir / "result.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return payload
+
+    def list_test_runs(self, limit: int = 20) -> Dict[str, Any]:
+        rows = self._read_jsonl(self.test_runs_file)
+        safe_limit = max(1, min(int(limit or 20), 200))
+        items = list(reversed(rows))[:safe_limit]
+        return {"items": items, "total": len(rows)}
+
+    def get_test_run(self, run_id: str) -> Dict[str, Any]:
+        rid = str(run_id or "").strip()
+        if not rid:
+            raise FileNotFoundError("run_id 不能为空")
+        detail = self.sessions / "test_runs" / rid / "result.json"
+        if detail.exists():
+            try:
+                return json.loads(detail.read_text(encoding="utf-8"))
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError("测试结果详情损坏") from exc
+        rows = self._read_jsonl(self.test_runs_file)
+        for row in reversed(rows):
+            if str(row.get("run_id", "")) == rid:
+                return row
+        raise FileNotFoundError("run_id 不存在")
 
     def install_tool_package(self, package_id: str = "", manifest_url: str = "", source_url: str = "") -> Dict[str, Any]:
         manifest = self._fetch_package_manifest(package_id=package_id, manifest_url=manifest_url, source_url=source_url)
@@ -1434,6 +2460,82 @@ class DataInterpreterAgent:
     def _save_meta(self, data: Dict[str, Dict[str, Any]]) -> None:
         self.meta_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def _local_source_dataset_map(self, source: str) -> Dict[str, str]:
+        source_norm = str(source or "").strip().lower()
+        if not source_norm:
+            return {}
+        meta = self._load_meta()
+        out: Dict[str, str] = {}
+        for did, info in meta.items():
+            if str(info.get("source", "")).strip().lower() != source_norm:
+                continue
+            sid = str(info.get("source_id", "")).strip()
+            if not sid:
+                continue
+            if self._find_dataset(did) is None:
+                continue
+            out[sid] = did
+        return out
+
+    def _local_uci_dataset_map(self) -> Dict[str, str]:
+        return self._local_source_dataset_map("uci")
+
+    def _find_existing_uci_dataset(self, uci_id: str) -> str:
+        sid = str(uci_id or "").strip()
+        if not sid:
+            return ""
+        return self._local_uci_dataset_map().get(sid, "")
+
+    def _find_existing_source_dataset(self, source: str, source_id: str) -> str:
+        sid = str(source_id or "").strip()
+        if not sid:
+            return ""
+        return self._local_source_dataset_map(source).get(sid, "")
+
+    @staticmethod
+    def _build_uci_filename(name: str, data_url: str, uci_id: int) -> str:
+        path = urllib.parse.urlsplit(data_url).path
+        ext = Path(path).suffix.lower()
+        if ext not in {".csv", ".xlsx"}:
+            ext = ".csv"
+        safe_name = re.sub(r"[^\w\-\u4e00-\u9fff]+", "_", str(name or "").strip(), flags=re.UNICODE).strip("_")
+        if not safe_name:
+            safe_name = f"uci_{uci_id}"
+        return f"{safe_name}{ext}"
+
+    @staticmethod
+    def _http_json(url: str, timeout: int = 20, headers: Optional[Dict[str, str]] = None) -> Any:
+        raw = DataInterpreterAgent._http_bytes(url=url, timeout=timeout, headers=headers)
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"远程接口返回非 JSON: {url}") from exc
+        if isinstance(payload, (dict, list)):
+            return payload
+        raise ValueError(f"远程接口返回格式异常: {url}")
+
+    @staticmethod
+    def _http_bytes(url: str, timeout: int = 30, headers: Optional[Dict[str, str]] = None) -> bytes:
+        req_headers = {"User-Agent": "DataInterpreterAgent/1.0"}
+        if isinstance(headers, dict):
+            req_headers.update({str(k): str(v) for k, v in headers.items() if str(k).strip() and str(v).strip()})
+        req = urllib.request.Request(url, headers=req_headers)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="ignore")
+            except Exception:  # noqa: BLE001
+                body = ""
+            msg = f"远程请求失败({exc.code}): {url}"
+            if body:
+                msg = f"{msg} | {body[:200]}"
+            raise ValueError(msg) from exc
+        except urllib.error.URLError as exc:
+            raise ValueError(f"远程请求失败: {url} ({exc.reason})") from exc
+
     @staticmethod
     def _default_llm_config() -> Dict[str, Any]:
         return {
@@ -1461,6 +2563,14 @@ class DataInterpreterAgent:
             "updated_at": "",
         }
 
+    @staticmethod
+    def _default_kaggle_config() -> Dict[str, Any]:
+        return {
+            "username": "",
+            "api_key": "",
+            "updated_at": "",
+        }
+
     def _load_llm_config(self) -> Dict[str, Any]:
         default = self._default_llm_config()
         if not self.llm_config_file.exists():
@@ -1473,8 +2583,23 @@ class DataInterpreterAgent:
         except Exception:  # noqa: BLE001
             return default
 
+    def _load_kaggle_config(self) -> Dict[str, Any]:
+        default = self._default_kaggle_config()
+        if not self.kaggle_config_file.exists():
+            return self._sanitize_kaggle_config(payload=default, base=default)
+        try:
+            raw = json.loads(self.kaggle_config_file.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return default
+            return self._sanitize_kaggle_config(payload=raw, base=default)
+        except Exception:  # noqa: BLE001
+            return default
+
     def _save_llm_config(self, config: Dict[str, Any]) -> None:
         self.llm_config_file.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _save_kaggle_config(self, config: Dict[str, Any]) -> None:
+        self.kaggle_config_file.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _load_llm_usage(self) -> Dict[str, Any]:
         default = self._default_llm_usage()
@@ -1531,6 +2656,51 @@ class DataInterpreterAgent:
         except Exception:  # noqa: BLE001
             out["output_cost_per_million"] = float(out.get("output_cost_per_million", 0.0))
         return out
+
+    @staticmethod
+    def _sanitize_kaggle_config(payload: Dict[str, Any], base: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        out = dict(base or DataInterpreterAgent._default_kaggle_config())
+        out["username"] = str(payload.get("username", out.get("username", ""))).strip()
+        out["api_key"] = str(payload.get("api_key", out.get("api_key", ""))).strip()
+        out["updated_at"] = str(payload.get("updated_at", out.get("updated_at", "")))
+        return out
+
+    @staticmethod
+    def _kaggle_auth_header(cfg: Dict[str, Any]) -> str:
+        username = str(cfg.get("username", "")).strip()
+        api_key = str(cfg.get("api_key", "")).strip()
+        if not username or not api_key:
+            return ""
+        token = base64.b64encode(f"{username}:{api_key}".encode("utf-8")).decode("utf-8")
+        return f"Basic {token}"
+
+    @staticmethod
+    def _extract_first_tabular_file(archive: bytes, default_slug: str) -> Optional[Tuple[str, bytes]]:
+        with tempfile.TemporaryDirectory(prefix="kaggle_import_") as td:
+            zip_path = Path(td) / "dataset.zip"
+            zip_path.write_bytes(archive)
+            try:
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    zf.extractall(td)
+            except zipfile.BadZipFile:
+                # Some Kaggle downloads can be direct CSV.
+                if archive.lstrip().startswith(b"{") or archive.lstrip().startswith(b"["):
+                    return None
+                return (f"{default_slug}.csv", archive)
+
+            root = Path(td)
+            candidates: List[Path] = []
+            for p in root.rglob("*"):
+                if not p.is_file():
+                    continue
+                if p.suffix.lower() not in {".csv", ".xlsx"}:
+                    continue
+                candidates.append(p)
+            if not candidates:
+                return None
+            candidates.sort(key=lambda p: p.stat().st_size, reverse=True)
+            chosen = candidates[0]
+            return (chosen.name, chosen.read_bytes())
 
     @staticmethod
     def _quota_status(cfg: Dict[str, Any], usage: Dict[str, Any]) -> Dict[str, Any]:
@@ -2249,6 +3419,12 @@ class DataInterpreterAgent:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     @staticmethod
+    def _append_jsonl(path: Path, row: Dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    @staticmethod
     def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
         if not path.exists():
             return []
@@ -2263,6 +3439,49 @@ class DataInterpreterAgent:
             if isinstance(row, dict):
                 out.append(row)
         return out
+
+    def _execute_test_command(self, cmd: List[str], timeout: int = 300) -> Dict[str, Any]:
+        started = time.time()
+        cmd_text = " ".join([str(v) for v in cmd])
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(self.base_dir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            output = proc.stdout or ""
+            status = "pass" if proc.returncode == 0 else "fail"
+            duration_ms = int((time.time() - started) * 1000)
+            return {
+                "cmd": cmd_text,
+                "returncode": int(proc.returncode),
+                "status": status,
+                "duration_ms": duration_ms,
+                "output": output[-12000:],
+            }
+        except FileNotFoundError as exc:
+            duration_ms = int((time.time() - started) * 1000)
+            return {
+                "cmd": cmd_text,
+                "returncode": 127,
+                "status": "skipped",
+                "duration_ms": duration_ms,
+                "output": f"命令不存在: {exc}",
+            }
+        except subprocess.TimeoutExpired as exc:
+            duration_ms = int((time.time() - started) * 1000)
+            output = str(exc.stdout or "")
+            return {
+                "cmd": cmd_text,
+                "returncode": 124,
+                "status": "fail",
+                "duration_ms": duration_ms,
+                "output": f"执行超时({timeout}s)\n{output[-8000:]}",
+            }
 
     def _load_tools(self) -> Dict[str, Dict[str, Any]]:
         if not self.tools_file.exists():

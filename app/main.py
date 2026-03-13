@@ -72,6 +72,31 @@ class DatasetAliasRequest(BaseModel):
     alias: str = ""
 
 
+class DatasetMetadataRequest(BaseModel):
+    alias: str = ""
+    category: str = ""
+    biz_description: str = ""
+    analysis_notes: str = ""
+    tags: List[str] = Field(default_factory=list)
+
+
+class UciImportRequest(BaseModel):
+    uci_id: int = Field(..., ge=1, description="UCI 数据集 ID")
+
+
+class KaggleImportRequest(BaseModel):
+    kaggle_ref: str = Field(..., description="Kaggle 数据集引用，格式 owner/dataset-slug")
+
+
+class KaggleConfigRequest(BaseModel):
+    username: str = ""
+    api_key: str = ""
+
+
+class TestRunRequest(BaseModel):
+    include_pytest: bool = True
+
+
 class InsightsAutoRequest(BaseModel):
     dataset_id: str = Field(..., description="目标数据集 ID")
     topic: str = Field(default="sales", description="sales|operations|finance|customer")
@@ -99,8 +124,8 @@ def architecture_services() -> dict:
 
 
 @app.get("/datasets")
-def datasets() -> dict:
-    return {"data": agent.list_datasets()}
+def datasets(module: str = "", category: str = "", keyword: str = "") -> dict:
+    return {"data": agent.list_datasets(module=module, category=category, keyword=keyword)}
 
 
 @app.put("/datasets/{dataset_id}/alias")
@@ -127,6 +152,61 @@ def dataset_preview(dataset_id: str, rows: int = 8) -> dict:
         return {"data": agent.get_dataset_overview(dataset_id=dataset_id, max_rows=rows)}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/datasets/{dataset_id}/summary")
+def dataset_summary(dataset_id: str) -> dict:
+    try:
+        return {"data": agent.get_dataset_summary(dataset_id=dataset_id)}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.put("/datasets/{dataset_id}/metadata")
+def dataset_metadata(dataset_id: str, req: DatasetMetadataRequest) -> dict:
+    try:
+        return agent.update_dataset_metadata(dataset_id=dataset_id, payload=req.dict())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/datasets/repository/uci")
+def uci_datasets(keyword: str = "", page: int = 1, page_size: int = 20) -> dict:
+    try:
+        return agent.fetch_uci_datasets(keyword=keyword, page=page, page_size=page_size)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/datasets/repository/kaggle")
+def kaggle_datasets(topic: str = "businessDataset", keyword: str = "", page: int = 1, page_size: int = 20) -> dict:
+    try:
+        return agent.fetch_kaggle_datasets(topic=topic, keyword=keyword, page=page, page_size=page_size)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/datasets/repository/kaggle/import")
+def kaggle_import(req: KaggleImportRequest) -> dict:
+    try:
+        return agent.import_kaggle_dataset(kaggle_ref=req.kaggle_ref)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/datasets/repository/public/sources")
+def public_sources() -> dict:
+    return {"data": agent.list_public_sources()}
+
+
+@app.post("/datasets/repository/uci/import")
+def uci_import(req: UciImportRequest) -> dict:
+    try:
+        return agent.import_uci_dataset(uci_id=req.uci_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/records")
@@ -165,6 +245,16 @@ def index() -> FileResponse:
 @app.get("/manage")
 def manage() -> FileResponse:
     return FileResponse(str(STATIC_DIR / "manage.html"))
+
+
+@app.get("/repository")
+def repository_page() -> FileResponse:
+    return FileResponse(str(STATIC_DIR / "repository.html"))
+
+
+@app.get("/test-manage")
+def test_manage_page() -> FileResponse:
+    return FileResponse(str(STATIC_DIR / "test_manage.html"))
 
 
 @app.get("/tools")
@@ -267,14 +357,44 @@ def get_llm_config() -> dict:
     return agent.get_llm_settings()
 
 
+@app.get("/kaggle/config")
+def get_kaggle_config() -> dict:
+    return agent.get_kaggle_settings()
+
+
 @app.put("/llm/config")
 def update_llm_config(req: LLMConfigRequest) -> dict:
     return agent.update_llm_settings(req.dict())
 
 
+@app.put("/kaggle/config")
+def update_kaggle_config(req: KaggleConfigRequest) -> dict:
+    return agent.update_kaggle_settings(req.dict())
+
+
 @app.post("/llm/reset")
 def reset_llm_usage() -> dict:
     return agent.reset_llm_usage()
+
+
+@app.get("/tests/runs")
+def tests_runs(limit: int = 20) -> dict:
+    return agent.list_test_runs(limit=limit)
+
+
+@app.get("/tests/runs/{run_id}")
+def tests_run_detail(run_id: str) -> dict:
+    try:
+        return {"data": agent.get_test_run(run_id=run_id)}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/tests/run")
+def tests_run(req: TestRunRequest) -> dict:
+    return agent.run_automated_tests(include_pytest=req.include_pytest)
 
 
 @app.get("/tools/state")

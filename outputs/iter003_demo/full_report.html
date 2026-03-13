@@ -1,0 +1,72 @@
+<html><body>
+<h1>Full Report - demo</h1>
+<br/>
+<h2>1. 数据集概览</h2>
+<li>行数: 3</li>
+<li>列数: 4</li>
+<li>数值列: amount</li>
+<li>类别列: -</li>
+<li>时间列: trade_date</li>
+<br/>
+<h2>2. 分析规划</h2>
+<li>basic_descriptive_statistics</li>
+<li>missing_value_analysis</li>
+<li>univariate_distribution_analysis</li>
+<li>multivariate_correlation_analysis</li>
+<li>anomaly_detection_analysis</li>
+<li>time_series_trend_analysis</li>
+<li>regression_target_analysis</li>
+<li>text_length_frequency_analysis</li>
+<br/>
+<h2>3. 数据事实</h2>
+<li>数据集包含 3 行、4 列。</li>
+<li>识别数值列 1 个、类别列 0 个、时间列 1 个。</li>
+<li>分析计划覆盖 8 类分析。</li>
+<br/>
+<h2>4. 统计推断</h2>
+<li>缺失值和异常值比例将影响统计结论稳定性。</li>
+<li>若存在高相关数值列，可用于特征筛选但需防止共线性误判。</li>
+<li>类别分布不均衡时，分类相关结论需谨慎外推。</li>
+<br/>
+<h2>5. 模型结论</h2>
+<li>当前流水线采用规则驱动通用分析，不绑定具体数据集字段。</li>
+<li>输出结果可作为后续建模与业务分析的基线。</li>
+<li>图表与统计表联合输出，便于人工复核。</li>
+<br/>
+<h2>6. 风险与限制</h2>
+<li>样本量不足或缺失值过高会降低结论可信度。</li>
+<li>自动字段语义识别存在启发式误差，需人工校验关键字段。</li>
+<li>综合可信度: medium。</li>
+<br/>
+<h2>7. 校验步骤与可信度</h2>
+<li>[warn] sample_size: 样本量较小(3)，统计推断可信度下降</li>
+<li>[pass] missing_data: 整体缺失率可控(0.00%)</li>
+<li>[pass] output_consistency: 图表与分析数量满足硬性要求</li>
+<li>可信度: medium</li>
+<br/>
+<h2>8. 图表索引</h2>
+<li>histogram.png: outputs/iter003_demo/charts/histogram.png</li>
+<li>bar.png: outputs/iter003_demo/charts/bar.png</li>
+<br/>
+<h2>9. 报表模板覆盖</h2>
+<li>dataset_overview</li>
+<li>field_type_identification</li>
+<li>missing_values</li>
+<li>duplicate_values</li>
+<li>outlier_detection</li>
+<li>numeric_statistics</li>
+<li>category_distribution</li>
+<li>label_distribution</li>
+<li>correlation</li>
+<li>group_aggregation</li>
+<li>top_bottom</li>
+<li>high_risk_fields</li>
+<li>feature_label_relation</li>
+<li>classification_evaluation</li>
+<li>regression_evaluation</li>
+<li>clustering_result</li>
+<li>time_trend</li>
+<li>text_overview</li>
+<li>chart_index</li>
+<li>final_summary</li>
+</body></html>

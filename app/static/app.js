@@ -1,4 +1,5 @@
 let datasetId = "";
+let datasetModule = "public";
 let historyRows = [];
 let historyPage = 1;
 const historyPageSize = 5;
@@ -6,18 +7,13 @@ let historyTotalPages = 1;
 let datasetsById = {};
 let allDatasets = [];
 
-const fileInput = document.getElementById("fileInput");
-const uploadBtn = document.getElementById("uploadBtn");
-const uploadInfo = document.getElementById("uploadInfo");
 const datasetFilterInput = document.getElementById("datasetFilterInput");
+const datasetModuleSelect = document.getElementById("datasetModuleSelect");
 const datasetSelect = document.getElementById("datasetSelect");
 const refreshDatasetsBtn = document.getElementById("refreshDatasetsBtn");
 const layoutModeBtn = document.getElementById("layoutModeBtn");
 const datasetInfo = document.getElementById("datasetInfo");
-const datasetAliasInput = document.getElementById("datasetAliasInput");
-const saveAliasBtn = document.getElementById("saveAliasBtn");
-const deleteDatasetBtn = document.getElementById("deleteDatasetBtn");
-const datasetAliasHint = document.getElementById("datasetAliasHint");
+const datasetMetaSummary = document.getElementById("datasetMetaSummary");
 const datasetPreviewWrap = document.getElementById("datasetPreviewWrap");
 const questionInput = document.getElementById("questionInput");
 const maxRowsInput = document.getElementById("maxRowsInput");
@@ -121,15 +117,17 @@ function clearResultArea() {
 }
 
 async function loadDatasets(preferredId) {
-  const resp = await fetch("/datasets");
+  const query = new URLSearchParams({ module: datasetModule });
+  const resp = await fetch(`/datasets?${query.toString()}`);
   const payload = await resp.json();
   allDatasets = (payload && payload.data) || [];
   renderDatasetOptions(preferredId);
   updateDatasetInfo();
-  updateAliasInput();
   if (datasetId) {
+    await loadDatasetSummary();
     await loadDatasetPreview();
   } else {
+    datasetMetaSummary.innerHTML = "<p class='muted'>未选择数据集</p>";
     datasetPreviewWrap.innerHTML = "<p class='muted'>未选择数据集</p>";
   }
 }
@@ -199,6 +197,30 @@ async function loadDatasetPreview() {
   `;
 }
 
+async function loadDatasetSummary() {
+  if (!datasetId) {
+    datasetMetaSummary.innerHTML = "<p class='muted'>未选择数据集</p>";
+    return;
+  }
+  const resp = await fetch(`/datasets/${encodeURIComponent(datasetId)}/summary`);
+  const payload = await resp.json();
+  const data = payload && payload.data;
+  if (!resp.ok || !data) {
+    datasetMetaSummary.innerHTML = "<p class='muted'>数据集总结加载失败</p>";
+    return;
+  }
+  const tags = Array.isArray(data.tags) ? data.tags : [];
+  const analyses = Array.isArray(data.recommended_analyses) ? data.recommended_analyses : [];
+  datasetMetaSummary.innerHTML = `
+    <p class="muted"><strong>数据集元数据总结</strong></p>
+    <p class="muted">分类: ${escapeHtml(data.category || "未分类")} | 来源: ${escapeHtml(data.module === "public" ? "公开数据集" : "私人数据集")}</p>
+    <p>${escapeHtml(data.biz_description || data.source_description || "暂无描述")}</p>
+    <p class="muted">${escapeHtml(data.analysis_notes || "")}</p>
+    <p class="muted">标签: ${tags.length ? tags.map((t) => escapeHtml(t)).join(" / ") : "无"}</p>
+    <p class="muted">推荐分析: ${analyses.length ? analyses.map((a) => escapeHtml(a)).join("；") : "通用分析"}</p>
+  `;
+}
+
 async function loadHistory() {
   const query = new URLSearchParams({
     page: String(historyPage),
@@ -258,41 +280,9 @@ function updateDatasetInfo() {
   }
   const selected = datasetsById[datasetSelect.value] || {};
   const alias = selected.alias ? ` | 别名: ${selected.alias}` : "";
-  datasetInfo.textContent = `当前数据集: ${selected.original_filename || selected.filename || datasetSelect.value}${alias}`;
+  const source = datasetModule === "public" ? "公开数据集" : "私人数据集";
+  datasetInfo.textContent = `当前数据集: ${selected.original_filename || selected.filename || datasetSelect.value}${alias} | ${source}`;
 }
-
-function updateAliasInput() {
-  const selected = datasetsById[datasetId] || {};
-  datasetAliasInput.value = selected.alias || "";
-  datasetAliasHint.textContent = "";
-}
-
-uploadBtn.addEventListener("click", async () => {
-  if (!fileInput.files || !fileInput.files.length) {
-    uploadInfo.textContent = "请先选择文件";
-    return;
-  }
-
-  const fd = new FormData();
-  fd.append("file", fileInput.files[0]);
-
-  setBusy(uploadBtn, true, "上传中...");
-  try {
-    const resp = await fetch("/upload", { method: "POST", body: fd });
-    const data = await resp.json();
-    if (!resp.ok) {
-      throw new Error(data.detail || "上传失败");
-    }
-    datasetId = data.dataset_id;
-    uploadInfo.textContent = `dataset_id: ${data.dataset_id} | ${data.rows}行 ${data.cols}列`;
-    await loadDatasets(data.dataset_id);
-    await loadHistory();
-  } catch (err) {
-    uploadInfo.textContent = `上传失败: ${err.message}`;
-  } finally {
-    setBusy(uploadBtn, false, "上传");
-  }
-});
 
 refreshDatasetsBtn.addEventListener("click", async () => {
   setBusy(refreshDatasetsBtn, true, "刷新中...");
@@ -304,10 +294,18 @@ refreshDatasetsBtn.addEventListener("click", async () => {
   }
 });
 
+datasetModuleSelect.addEventListener("change", async () => {
+  datasetModule = datasetModuleSelect.value || "public";
+  datasetId = "";
+  historyPage = 1;
+  await loadDatasets("");
+  await loadHistory();
+});
+
 datasetSelect.addEventListener("change", async () => {
   datasetId = datasetSelect.value;
   updateDatasetInfo();
-  updateAliasInput();
+  await loadDatasetSummary();
   await loadDatasetPreview();
   await loadHistory();
 });
@@ -316,68 +314,14 @@ datasetFilterInput.addEventListener("input", async () => {
   const prev = datasetId;
   renderDatasetOptions(prev);
   updateDatasetInfo();
-  updateAliasInput();
   if (datasetId) {
+    await loadDatasetSummary();
     await loadDatasetPreview();
   } else {
+    datasetMetaSummary.innerHTML = "<p class='muted'>筛选后无可用数据集</p>";
     datasetPreviewWrap.innerHTML = "<p class='muted'>筛选后无可用数据集</p>";
   }
   await loadHistory();
-});
-
-saveAliasBtn.addEventListener("click", async () => {
-  if (!datasetId) {
-    datasetAliasHint.textContent = "请先选择数据集";
-    return;
-  }
-  setBusy(saveAliasBtn, true, "保存中...");
-  datasetAliasHint.textContent = "";
-  try {
-    const resp = await fetch(`/datasets/${encodeURIComponent(datasetId)}/alias`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ alias: (datasetAliasInput.value || "").trim() })
-    });
-    const data = await resp.json();
-    if (!resp.ok) {
-      throw new Error((data && data.detail) || "保存别名失败");
-    }
-    datasetAliasHint.textContent = `别名已更新: ${data.alias || "（空）"}`;
-    await loadDatasets(datasetId);
-  } catch (err) {
-    datasetAliasHint.textContent = err.message || "保存别名失败";
-  } finally {
-    setBusy(saveAliasBtn, false, "保存别名");
-  }
-});
-
-deleteDatasetBtn.addEventListener("click", async () => {
-  if (!datasetId) {
-    datasetAliasHint.textContent = "请先选择数据集";
-    return;
-  }
-  const selected = datasetsById[datasetId] || {};
-  const label = selected.original_filename || selected.filename || datasetId;
-  if (!window.confirm(`确认删除数据集：${label} ?`)) {
-    return;
-  }
-  setBusy(deleteDatasetBtn, true, "删除中...");
-  datasetAliasHint.textContent = "";
-  try {
-    const resp = await fetch(`/datasets/${encodeURIComponent(datasetId)}`, { method: "DELETE" });
-    const data = await resp.json();
-    if (!resp.ok) {
-      throw new Error((data && data.detail) || "删除失败");
-    }
-    datasetAliasHint.textContent = `删除成功（文件: ${data.removed_files || 0}，元数据: ${data.removed_meta ? "已清理" : "无"}）`;
-    datasetId = "";
-    await loadDatasets("");
-    await loadHistory();
-  } catch (err) {
-    datasetAliasHint.textContent = err.message || "删除失败";
-  } finally {
-    setBusy(deleteDatasetBtn, false, "删除数据集");
-  }
 });
 
 questionTemplates.addEventListener("click", (event) => {
@@ -451,7 +395,7 @@ historyList.addEventListener("click", (event) => {
 
 async function runAsk(mode, triggerBtn) {
   if (!datasetId) {
-    answerText.textContent = "请先选择已有数据集或上传新文件";
+    answerText.textContent = "请先选择数据集";
     return;
   }
 
@@ -703,6 +647,7 @@ function escapeAttr(s) {
 
 (async function bootstrap() {
   try {
+    datasetModule = datasetModuleSelect.value || "public";
     const savedMode = localStorage.getItem("layout_mode");
     if (savedMode === "workbench" || savedMode === "standard") {
       applyLayoutMode(savedMode);

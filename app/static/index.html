@@ -12,10 +12,11 @@
       <div class="head-row">
         <div>
           <h1>Data Interpreter 控制台</h1>
-          <p class="sub">上传数据后，直接用自然语言提问并查看分析结果。</p>
+          <p class="sub">先在数据仓库选择数据集，再用自然语言提问并查看分析结果。</p>
         </div>
         <div class="head-actions">
           <a class="btn-link" href="/insights">商业建议</a>
+          <a class="btn-link" href="/test-manage">测试管理</a>
           <a class="btn-link" href="/tools">工具管理</a>
           <a class="btn-link" href="/manage">LLM 配置</a>
           <a class="btn-link" href="/api-docs">接口文档</a>
@@ -28,27 +29,21 @@
       <aside class="left-col">
         <section class="panel dataset-panel">
           <h2>1. 选择数据集</h2>
+          <label class="label" for="datasetModuleSelect">数据集类型</label>
+          <select id="datasetModuleSelect">
+            <option value="public">公开数据集</option>
+            <option value="private">私人数据集</option>
+          </select>
           <label class="label" for="datasetFilterInput">搜索数据集（别名/文件名/ID）</label>
           <input id="datasetFilterInput" type="text" placeholder="输入关键字过滤数据集" />
           <div class="row">
             <select id="datasetSelect"></select>
             <button id="refreshDatasetsBtn">刷新列表</button>
+            <a class="btn-link" href="/repository">数据仓库</a>
           </div>
-          <div class="row" style="margin-top: 8px;">
-            <input id="datasetAliasInput" type="text" placeholder="设置当前数据集别名（可选）" />
-            <button id="saveAliasBtn" type="button">保存别名</button>
-            <button id="deleteDatasetBtn" type="button">删除数据集</button>
-          </div>
-          <p id="datasetInfo" class="muted">可先选择已有文件，或上传新文件后自动选中</p>
-          <p id="datasetAliasHint" class="muted"></p>
+          <p id="datasetInfo" class="muted">请选择数据集后开始分析</p>
+          <div id="datasetMetaSummary" class="dataset-preview"></div>
           <div id="datasetPreviewWrap" class="dataset-preview"></div>
-
-          <h3>上传新文件</h3>
-          <div class="row">
-            <input id="fileInput" type="file" accept=".csv,.xlsx" />
-            <button id="uploadBtn">上传</button>
-          </div>
-          <p id="uploadInfo" class="muted">尚未上传数据集</p>
         </section>
 
         <section class="panel history-panel">
